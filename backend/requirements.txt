@@ -1,0 +1,56 @@
+# Backend
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# Earth Engine
+earthengine-api==0.1.384
+geemap
+
+# Data Processing
+numpy==1.24.3
+pandas==2.1.4
+scipy==1.11.4
+scikit-learn==1.3.2
+xarray==2023.10.1
+rasterio==1.3.9
+netcdf4==1.6.5
+geopandas==0.14.1
+
+# Time Series
+statsmodels==0.14.0
+prophet==1.1.5
+cmdstanpy==1.2.0
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.12.1
+pymongo
+
+# Google APIs
+google-api-python-client==2.108.0
+google-auth-httplib2==0.1.1
+google-auth-oauthlib==1.1.0
+
+# Utilities
+python-dotenv==1.0.0
+schedule==1.2.0
+joblib==1.3.2
+tqdm==4.66.1
+
+# Async
+aiohttp==3.9.1
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+google-auth-oauthlib
+playwright 
+anthropic 
+pillow
+paramiko==2.11.0
+pysftp
+h5py
+watchdog
+apscheduler
