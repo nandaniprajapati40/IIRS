@@ -1,10 +1,12 @@
+
+
 """
 init_geoserver.py
 ─────────────────────────────────────────────────────────────────────────────
 GeoServer REST API wrapper.
 
 Fixes applied:
-  - <n> → <name> in all XML payloads (GeoServer was rejecting every POST)
+  - <n> → <n> in all XML payloads (GeoServer was rejecting every POST)
   - Removed all references to GEOSERVER['datastore'] (key does not exist).
     Methods that need a store name now accept `store_name` as a parameter.
   - publish_all_layers: fixed date_strings crash (was iterating dicts as
@@ -12,6 +14,21 @@ Fixes applied:
   - create_datastores: each store points at the correct per-parameter dir
     so GeoServer can serve the right rasters.
   - update_coverage_store_file: unchanged — used by main.py to swap rasters.
+
+FIX-GEOSERVER-1 (2026-04-16):
+  Added publish_coverage() — POSTs to .../coveragestores/{store}/coverages
+  to register the layer in GeoServer for the first time.  This is the missing
+  step that caused configure_layer to always return 404 and assign_style to
+  always return 500: update_coverage_store_file() only updates the file
+  pointer; it does NOT auto-publish the coverage.
+
+  configure_layer() now calls publish_coverage() on 404 and retries the GET
+  before proceeding with the PUT, so the full sequence is safe on both first
+  run (new store) and subsequent runs (existing layer refresh).
+
+  push_to_geoserver() in main.py now checks return values and only logs
+  ✅ when configure_layer + assign_style both succeed, eliminating the
+  false-positive "Forecast layer ready" messages.
 """
 
 import xml.etree.ElementTree as ET
@@ -100,7 +117,6 @@ class GeoServerAPI:
             logger.info(f"Workspace '{self.workspace}' already exists")
             return True
 
-        # FIX: use <name> not <n>
         xml = f"<workspace><name>{self.workspace}</name></workspace>"
         resp = self._post("/rest/workspaces", xml)
 
@@ -123,7 +139,6 @@ class GeoServerAPI:
 
         for param, store_name in GEOSERVER["stores"].items():
             url  = f"/rest/workspaces/{self.workspace}/coveragestores"
-            # FIX: use <name> not <n>
             xml  = f"""<coverageStore>
   <name>{store_name}</name>
   <type>GeoTIFF</type>
@@ -165,7 +180,7 @@ class GeoServerAPI:
                 auth=self.auth,
                 headers={
                     "Content-Type": "image/tiff",
-                    "X-Requested-With": "XMLHttpRequest",   # ADD THIS
+                    "X-Requested-With": "XMLHttpRequest",
                 },
                 timeout=120,
             )
@@ -179,17 +194,91 @@ class GeoServerAPI:
         logger.error(f"Upload failed for {layer_name}: {resp.status_code} {resp.text[:300]}")
         return False
 
-    # ── Layer configuration ────────────────────────────────────────────────
+    # ── Publish coverage (FIX-GEOSERVER-1) ────────────────────────────────
 
-    def configure_layer(self, layer_name: str, store_name: str, style: Optional[str] = None) -> bool:
-        """Enable layer and optionally assign style."""
-        url  = (
+    def publish_coverage(self, store_name: str, layer_name: str) -> bool:
+        """
+        Publish a coverage from an existing store, creating the GeoServer layer.
+
+        This is the missing step between "store points at a file" and
+        "layer is accessible via WMS/WCS".  update_coverage_store_file() only
+        updates the file pointer; it does NOT auto-publish the coverage.
+        Without this call, configure_layer() always gets 404 and assign_style()
+        always returns 500.
+
+        GeoServer auto-detects CRS, native envelope, and grid geometry from
+        the GeoTIFF when no explicit values are provided.
+        """
+        # Check whether the coverage is already published to avoid duplicate-name errors.
+        check_url = (
             f"/rest/workspaces/{self.workspace}"
             f"/coveragestores/{store_name}/coverages/{layer_name}"
         )
-        resp = self._get(url)
+        if self._get(check_url).status_code == 200:
+            logger.debug(f"Coverage already published: {layer_name}")
+            return True
+
+        url = (
+            f"/rest/workspaces/{self.workspace}"
+            f"/coveragestores/{store_name}/coverages"
+        )
+        xml = f"""<coverage>
+  <name>{layer_name}</name>
+  <nativeName>{layer_name}</nativeName>
+  <title>{layer_name}</title>
+  <enabled>true</enabled>
+</coverage>"""
+        resp = self._post(url, xml)
+
+        if resp.status_code in (200, 201):
+            logger.info(f"Published coverage: {layer_name} (store={store_name})")
+            return True
+
+        # GeoServer sometimes returns 500 with "already exists" on a race condition
+        if resp.status_code == 500 and "already exists" in resp.text.lower():
+            logger.debug(f"Coverage already exists (race): {layer_name}")
+            return True
+
+        logger.error(
+            f"publish_coverage failed for '{layer_name}' (store={store_name}): "
+            f"{resp.status_code} {resp.text[:300]}"
+        )
+        return False
+
+    # ── Layer configuration ────────────────────────────────────────────────
+
+    def configure_layer(self, layer_name: str, store_name: str, style: Optional[str] = None) -> bool:
+        """
+        Enable layer and optionally assign style.
+
+        FIX-GEOSERVER-1: If the coverage GET returns 404 (layer was never
+        published), call publish_coverage() first and then retry.  This makes
+        the method safe on both first run and subsequent runs.
+        """
+        coverage_url = (
+            f"/rest/workspaces/{self.workspace}"
+            f"/coveragestores/{store_name}/coverages/{layer_name}"
+        )
+        resp = self._get(coverage_url)
+
+        if resp.status_code == 404:
+            # Layer not published yet — publish it first, then retry.
+            logger.debug(
+                f"configure_layer: coverage not found (404) for {layer_name} — publishing now"
+            )
+            if not self.publish_coverage(store_name, layer_name):
+                logger.error(
+                    f"configure_layer: publish_coverage failed for {layer_name} — cannot configure"
+                )
+                return False
+            # Retry the GET after publish
+            resp = self._get(coverage_url)
+
         if resp.status_code != 200:
-            logger.warning(f"configure_layer: GET failed ({resp.status_code}) for {layer_name}")
+            logger.warning(
+                f"configure_layer: GET failed ({resp.status_code}) for {layer_name} "
+                f"even after publish attempt"
+            )
             return False
 
         root = self._safe_xml(resp)
@@ -199,7 +288,7 @@ class GeoServerAPI:
             elem.text = "true"
 
         xml_str  = ET.tostring(root, encoding="unicode")
-        resp_put = self._put(url, xml_str)
+        resp_put = self._put(coverage_url, xml_str)
 
         if resp_put.status_code in (200, 201):
             logger.info(f"Configured layer: {layer_name}")
@@ -254,7 +343,6 @@ class GeoServerAPI:
     def assign_style(self, layer_name: str, style_name: str) -> bool:
         """Assign a default SLD style to a layer."""
         url = f"/rest/layers/{self.workspace}:{layer_name}"
-        # FIX: use <name> not <n>
         xml = f"""<layer>
   <defaultStyle>
     <name>{style_name}</name>
@@ -294,6 +382,10 @@ class GeoServerAPI:
         """
         Point an existing coverage store at a new GeoTIFF on disk.
         Used by main.py to swap which forecast raster is 'live'.
+
+        Note: this only updates the file pointer.  If the coverage has never
+        been published, call publish_coverage() afterwards (configure_layer
+        now handles this automatically).
         """
         url = f"/rest/workspaces/{self.workspace}/coveragestores/{store_name}"
         xml = f"""<coverageStore>
@@ -342,8 +434,6 @@ class GeoServerAPI:
             )
 
             if ok:
-                # FIX: iterate cursor properly — each doc is a dict with a
-                # "date" key, not a tuple.
                 cursor       = processed_collection.find(
                     {"parameter": param}
                 ).sort("date", 1)
@@ -438,35 +528,31 @@ class GeoServerAPI:
             return True
         return False
 
-    def create_coverage_store(self, store_name, file_path):
+    def create_coverage_store(self, store_name: str, file_path: Path) -> bool:
         url = f"/rest/workspaces/{self.workspace}/coveragestores"
-        
-        xml = f"""
-            <coverageStore>
-            <name>{store_name}</name>
-            <type>GeoTIFF</type>
-            <enabled>true</enabled>
-            <workspace>{self.workspace}</workspace>
-            <url>file:{file_path}</url>
-            </coverageStore>
-            """
-        
+        xml = f"""<coverageStore>
+  <name>{store_name}</name>
+  <type>GeoTIFF</type>
+  <enabled>true</enabled>
+  <workspace>{self.workspace}</workspace>
+  <url>file:{file_path}</url>
+</coverageStore>"""
         resp = self._post(url, xml)
-        
         if resp.status_code in (200, 201):
             logger.info(f"Created coverage store: {store_name}")
             return True
-        
         logger.error(f"Failed to create store {store_name}: {resp.status_code} {resp.text}")
         return False
 
-
-
-    def coverage_store_exists(self, store_name):
-        resp = self._get(f"/rest/workspaces/{self.workspace}/coveragestores/{store_name}.json")
+    def coverage_store_exists(self, store_name: str) -> bool:
+        resp = self._get(
+            f"/rest/workspaces/{self.workspace}/coveragestores/{store_name}.json"
+        )
         return resp.status_code == 200
 
-    def create_coverage_store_if_not_exists(self, store_name, file_path):
+    def create_coverage_store_if_not_exists(
+        self, store_name: str, file_path: Path
+    ) -> bool:
         try:
             if not self.coverage_store_exists(store_name):
                 logger.info(f"[geoserver] Creating store: {store_name}")

@@ -68,11 +68,85 @@
 
 # print("\n====== DEBUG END ======\n")
 
+# import rasterio
+# import numpy as np
+# from pathlib import Path
+
+# rain_dir = Path("data/raw/insat_rain")
+
+# files = sorted(rain_dir.glob("*.tif"))
+
+# print(f"Total rain files: {len(files)}\n")
+
+# for fp in files:
+#     try:
+#         with rasterio.open(fp) as src:
+#             data = src.read(1).astype(float)
+
+#             if src.nodata is not None:
+#                 data[data == src.nodata] = np.nan
+
+#             valid = data[~np.isnan(data)]
+
+#             if len(valid) == 0:
+#                 print(f"❌ {fp.name} → ALL NODATA")
+#                 continue
+
+#             mean = np.mean(valid)
+#             minv = np.min(valid)
+#             maxv = np.max(valid)
+
+#             status = "OK"
+#             if mean == 0:
+#                 status = "⚠️ ZERO DATA"
+
+#             print(f"{fp.name} | mean={mean:.3f} | min={minv:.3f} | max={maxv:.3f} | {status}")
+
+#     except Exception as e:
+#         print(f"❌ {fp.name} → ERROR: {e}")
+
+
 import rasterio
 import numpy as np
+from pathlib import Path
 
-fp = "data/raw/insat_rain/3RIMG_31MAR2022_0015_L3G_IMR_DLY_V01R00.tif"
+pet_dir = Path("data/raw/insat_pet")
 
-with rasterio.open(fp) as src:
-    data = src.read(1)
-    print("Unique values:", np.unique(data)[:10])
+files = sorted(pet_dir.glob("*.tif"))
+
+print(f"Total PET files: {len(files)}\n")
+
+for fp in files:
+    try:
+        with rasterio.open(fp) as src:
+            data = src.read(1).astype(float)
+
+            if src.nodata is not None:
+                data[data == src.nodata] = np.nan
+
+            valid = data[~np.isnan(data)]
+
+            if len(valid) == 0:
+                print(f"❌ {fp.name} → ALL NODATA")
+                continue
+
+            mean = np.mean(valid)
+            minv = np.min(valid)
+            maxv = np.max(valid)
+
+            # status check
+            status = "OK"
+
+            if mean == 0:
+                status = "⚠️ ZERO DATA"
+
+            elif mean < 1:
+                status = "⚠️ VERY LOW PET"
+
+            elif mean > 10:
+                status = "⚠️ VERY HIGH PET"
+
+            print(f"{fp.name} | mean={mean:.3f} | min={minv:.3f} | max={maxv:.3f} | {status}")
+
+    except Exception as e:
+        print(f"❌ {fp.name} → ERROR: {e}")
