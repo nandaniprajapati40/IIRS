@@ -3,11 +3,12 @@
     <div class="wiki-topbar">
       <div class="topbar-inner">
         <div class="brand" @click="$emit('launch')">
-          <span class="icon">🌾</span> <span class="brand-text">AquaWatch Encyclopedia</span>
+          <span class="icon">🌾</span> <span class="brand-text">Irrigation crop Water Requirement</span>
         </div>
         <div class="controls">
            <button class="btn-theme" @click="isDark = !isDark">{{ isDark ? '☀️ Light' : '🌙 Dark' }}</button>
            <button class="btn-launch" @click="$emit('launch')">Launch Dashboard</button>
+           <button @click="showHome" class="home-btn">⌂ Home</button>
         </div>
       </div>
     </div>
@@ -160,9 +161,13 @@
 import { ref } from 'vue'
 
 defineEmits(['launch'])
-
+const currentView = ref('home')
 // Maintain state for the background theme. Start in light mode for the Wiki theme by default.
 const isDark = ref(false)
+
+function showHome() {
+  currentView.value = 'home'
+}
 </script>
 
 <style scoped>
@@ -355,4 +360,12 @@ code {
   .wiki-thumb.right, .wiki-thumb.left { float: none; width: 100% !important; margin: 24px 0; }
   .article-title { font-size: 2rem; }
 }
+
+.home-btn {
+  padding:6px 16px; border-radius:10px; font-size:0.8rem;
+  font-family:'JetBrains Mono',monospace; font-weight:500;
+  color:#6B8BAD; background:transparent; border:1px solid transparent;
+  cursor:pointer; transition:all 0.2s; white-space:nowrap;
+}
+.home-btn:hover { color: var(--accent-teal-glow); border-color: var(--accent-teal-glow-30); background: var(--accent-teal-glow-10); }
 </style>

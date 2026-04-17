@@ -39,7 +39,7 @@
           <a href="#region" class="nav-link" @click.prevent="scrollTo('region')">Study Region</a>
           <a href="#faqs"   class="nav-link" @click.prevent="$emit('faqs')">FAQs</a>
           <!-- <button @click="$emit('launch')" class="btn-launch">Launch Dashboard →</button> -->
-          <button @click="isDark = !isDark" class="btn-theme">{{ isDark ? '☀️' : '🌙' }}</button>
+          <!-- <button @click="isDark = !isDark" class="btn-theme">{{ isDark ? '☀️' : '🌙' }}</button> -->
         </div>
         <button class="mobile-menu-btn" @click="mobileOpen = !mobileOpen">
           <span></span><span></span><span></span>
@@ -76,7 +76,7 @@
           Rabi Season Active · Udham Singh Nagar, Uttarakhand
         </div>
         <h1 class="hero-title fade-up" style="animation-delay:.2s">
-          CROP WAT<span class="title-accent">ER REQUIEMENTS</span>
+          CROP WAT<span class="title-accent">ER REQUIREMENTS</span>
           <span class="title-sub">Irrigation water requirements</span>
         </h1>
         <p class="hero-desc fade-up" style="animation-delay:.35s">
@@ -142,7 +142,7 @@
         <div class="footer-brand">
           <span>🌾</span>
           <div>
-            <p class="fb-name">AquaWatch &nbsp;·&nbsp; Irrigation Water Requirements</p>
+            <p class="fb-name">&nbsp;·&nbsp; Irrigation Water Requirements</p>
             <p class="fb-sub">ISRO &nbsp;·&nbsp; IIRS &nbsp;·&nbsp; Department of Space, Govt. of India</p>
           </div>
         </div>
@@ -188,28 +188,7 @@ const particles = Array.from({ length: 18 }, (_, i) => ({
   size: 2 + Math.random() * 4, op: 0.08 + Math.random() * 0.22,
 }))
 
-const whyItems = [
-  {
-    icon: '🎯',
-    title: 'Accurate Crop Water Demand',
-    desc: 'Combines crop-specific growth coefficients with real-time atmospheric observations for precise demand estimation at every stage.',
-  },
-  {
-    icon: '🗺️',
-    title: 'Field-Level Planning',
-    desc: 'High-resolution Sentinel-2 imagery enables irrigation planning at the individual field scale — not just regional averages.',
-  },
-  {
-    icon: '💧',
-    title: 'Reduced Water Wastage',
-    desc: 'By accounting for effective rainfall, AquaWatch ensures irrigation is applied only when and where it is truly needed.',
-  },
-  {
-    icon: '📈',
-    title: 'Improved Crop Productivity',
-    desc: 'Timely and precise irrigation guidance supports optimal crop health and yield throughout the Rabi season.',
-  },
-]
+
 
 
 
@@ -244,10 +223,11 @@ const whyItems = [
   
   --card-bg: rgba(30, 41, 59, 0.5);
   
-  --header-bg: #FFFFFF;
-  --header-border: rgba(0, 0, 0, 0.10);
-  --nav-bg: #E8F5F3;
-  --nav-border: rgba(0, 180, 150, 0.20);
+  --header-bg: #1A4A6B;
+  --header-text: #FFFFFF;
+  --nav-bg: #009688;
+  --nav-text: #FFFFFF;
+  --hero-overlay: linear-gradient(135deg, rgba(10,15,28,0.88) 0%, rgba(10,15,28,0.7) 50%, rgba(10,15,28,0.85) 100%);
 
   font-family: 'Inter', sans-serif;
   background: var(--bg-primary);
@@ -272,16 +252,17 @@ const whyItems = [
   --text-muted: #64748B;
   
   --accent-teal: #0D9488;
-  --accent-teal-glow: rgba(13, 148, 136, 0.12);
+  --accent-teal-glow: rgba(13, 148, 136, 0.18);
   --accent-amber: #D97706;
   --accent-blue: #2563EB;
   
   --card-bg: rgba(255, 255, 255, 0.85);
   
-  --header-bg: #FFFFFF;
-  --header-border: rgba(0, 0, 0, 0.10);
-  --nav-bg: #E8F5F3;
-  --nav-border: rgba(0, 180, 150, 0.20);
+  --header-bg: #F8FAFC;
+  --header-text: #0F172A;
+  --nav-bg: #FFFFFF;
+  --nav-text: #0D9488;
+  --hero-overlay: linear-gradient(135deg, rgba(248,250,252,0.7) 0%, rgba(248,250,252,0.4) 50%, rgba(248,250,252,0.6) 100%);
 }
 
 h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
@@ -336,7 +317,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
   border: 1px dashed rgba(59,130,246,0.15);
   animation: orbit 60s linear infinite reverse;
 }
-.home-root:not(.dark) .orbit-ring { border-color: rgba(13,148,136,0.15); }
+.home-root:not(.dark) .orbit-ring { border-color: rgba(13,148,136,0.25); }
 .orbit-dot {
   position: absolute; top: -5px; left: 50%; margin-left: -5px;
   width: 10px; height: 10px; border-radius: 50%;
@@ -359,14 +340,14 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
    ────────────────────────────────────────────────────────────────────── */
 .app-header {
   position: relative; z-index: 201;
-  background: #1A4A6B;
+  background: var(--header-bg);
   border-bottom: 1px solid rgba(0, 0, 0, 0.18);
   padding: 14px 24px;
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.25);
   transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
 .home-root:not(.dark) .app-header {
-  background: #1A4A6B;
+  background: var(--header-bg);
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
 }
 
@@ -394,18 +375,18 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 .header-center h2 {
   font-family: 'Outfit', sans-serif;
   font-size: clamp(1.1rem, 2vw, 1.5rem);
-  font-weight: 800; color: #FFFFFF;
+  font-weight: 800; color: var(--header-text);
   margin: 0 0 4px; transition: color 0.3s ease;
   text-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 .header-center h3 {
   font-size: clamp(1.0rem, 1.6vw, 1.15rem);
-  color: rgba(255, 255, 255, 0.90);
+  color: var(--header-text); opacity: 0.9;
   font-weight: 500; margin: 0 0 2px;
 }
 .header-center h4 {
   font-size: clamp(0.8rem, 1.3vw, 0.95rem);
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--header-text); opacity: 0.75;
   font-weight: 400; margin: 0;
 }
 
@@ -414,13 +395,13 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
    ────────────────────────────────────────────────────────────────────── */
 .nav-bar {
   position: sticky; top: 0; z-index: 200;
-  background: #009688;
+  background: var(--nav-bg);
   border-bottom: 2px solid rgba(0, 0, 0, 0.15);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.20);
   transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
 .home-root:not(.dark) .nav-bar {
-  background: #009688;
+  background: var(--nav-bg);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
 }
 
@@ -432,7 +413,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 
 .nav-links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .nav-link {
-  font-size: 0.9rem; color: #FFFFFF;
+  font-size: 0.9rem; color: var(--nav-text);
   text-decoration: none; padding: 8px 20px; border-radius: 6px;
   transition: all 0.2s ease; font-weight: 600;
   letter-spacing: 0.04em; text-transform: uppercase;
@@ -440,7 +421,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 .nav-link { position: relative; }
 .nav-link::after {
   content: ''; position: absolute; bottom: 4px; left: 50%;
-  width: 0%; height: 2px; background: #FFFFFF;
+  width: 0%; height: 2px; background: var(--nav-text);
   transition: all 0.3s ease; transform: translateX(-50%); border-radius: 2px;
 }
 .nav-link:hover { color: #FFFFFF; background: rgba(255,255,255,0.18); }
@@ -512,7 +493,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 .status-strip {
   position: relative; z-index: 100;
   background: var(--accent-teal-glow);
-  border-bottom: 1px solid var(--border-light);
+  box-shadow: inset 0 -1px 0 var(--border-light);
   padding: 10px 24px;
 }
 .status-strip-inner {
@@ -563,12 +544,10 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 .hero-bg-overlay {
   position: absolute; inset: 0;
   /* Dark overlay ensures text is highly readable */
-  background: linear-gradient(135deg, rgba(10,15,28,0.88) 0%, rgba(10,15,28,0.7) 50%, rgba(10,15,28,0.85) 100%);
-  transition: background 0.4s ease;
-}
-.home-root:not(.dark) .hero-bg-overlay {
-  /* Light theme hero needs strong translucent white to keep dark text readable */
-  background: linear-gradient(135deg, rgba(248,250,252,0.92) 0%, rgba(248,250,252,0.7) 50%, rgba(248,250,252,0.88) 100%);
+    background: var(--hero-overlay);
+    transition: background 0.4s ease;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
 }
 
 .hero-inner { position: relative; z-index: 2; max-width: 900px; margin: 0 auto; }
@@ -625,7 +604,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
   font-family: 'Inter', sans-serif;
 }
 .home-root:not(.dark) .title-sub {
-  color: #D97706; text-shadow: none;
+  color: #D97706; text-shadow: 0 1px 2px rgba(255,255,255,0.8);
 }
 
 .hero-desc {
@@ -635,7 +614,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
   text-shadow: 0 2px 8px rgba(0,0,0,0.5); font-weight: 400;
 }
 .home-root:not(.dark) .hero-desc {
-  color: #1E293B; font-weight: 500;
+  color: #0F172A; font-weight: 500;
   text-shadow: 0 1px 2px rgba(255,255,255,0.8);
 }
 .hero-desc strong { color: var(--accent-teal); font-weight: 700; }
@@ -742,7 +721,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
   display: flex; align-items: flex-end; padding: 24px; transition: background 0.4s ease;
 }
 .home-root:not(.dark) .region-image-overlay {
-  background: linear-gradient(to top, rgba(15,23,42,0.6) 0%, transparent 55%);
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 55%);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -771,24 +750,28 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
    FOOTER
    ────────────────────────────────────────────────────────────────────── */
 .site-footer {
-  position: relative; z-index: 1; background: var(--bg-primary);
-  border-top: 1px solid var(--border); padding: 60px 24px 40px;
+  position: relative; z-index: 1; 
+  background: #070808; /* Slate 950 - deeper, more premium dark */
+  border-top: 1px solid var(--border); padding: 10px 24px 40px;
+}
+.home-root:not(.dark) .site-footer {
+  background: #f1f5f9; /* Slate 100 - clean, distinct light gray */
 }
 .footer-inner {
-  max-width: 1200px; margin: 0 auto; display: flex; flex-wrap: wrap;
+  max-width: 1100px; margin: 0 auto; display: flex; flex-wrap: wrap;
   align-items: flex-start; justify-content: space-between; gap: 32px;
 }
 .footer-brand { display: flex; align-items: center; gap: 16px; font-size: 1.8rem; }
-.fb-name { font-weight: 800; font-family: 'Outfit', sans-serif; font-size: 1.25rem; color: var(--text-primary); margin: 0 0 6px; letter-spacing: 0.05em; }
+.fb-name { font-weight: 700; font-family: 'Outfit', sans-serif; font-size: 1.25rem; color: var(--text-primary); margin: 0 0 6px; letter-spacing: 0.05em; }
 .fb-sub  { font-size: 0.8rem; color: var(--text-muted); margin: 0; }
 .footer-tech { display: flex; flex-wrap: wrap; gap: 8px; max-width: 460px; }
 .ft-badge {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border-radius: 50px;
+  padding: 5px 10px; border-radius: 50px;
   border: 1px solid var(--border); background: var(--surface);
   font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; transition: all 0.2s ease;
 }
-.ft-badge:hover { border-color: var(--accent-teal); color: var(--accent-teal); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+.ft-badge:hover { border-color: var(--accent-teal); color: var(--accent-teal); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(82, 165, 224, 0.05); }
 .footer-links-col { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .fc { font-size: 0.75rem; color: var(--text-muted); margin: 0; font-family: 'JetBrains Mono', monospace; }
 

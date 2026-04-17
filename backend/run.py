@@ -251,9 +251,7 @@ def run_etc(processor: DataProcessor):
                 kc_arr  = src.read(1)
                 profile = src.profile.copy()
 
-            # BUG-1 FIX: select_pet_sum() renamed in processor.py v5.2.
-            #   Thesis §5.4: ETc uses single daily PET (not interval sum).
-            # BUG-2 FIX: guard against None (no INSAT file within ±2 days).
+           
             kc_data  = {"filepath": kc_tif, "profile": profile}
             pet_data = processor.select_pet_daily(
                 kc_date, pet_files, sentinel_profile=profile
@@ -362,10 +360,7 @@ def run_iwr(processor: DataProcessor):
             rain_data = processor.select_rainfall_sum(
                 prev_date, cwr_date, rain_files, sentinel_profile=cwr_profile
             )
-            # BUG-3 FIX: kwarg was `rainfall_arr=rain_data["data"]` — two problems:
-            #   (a) wrong kwarg name: calculate_iwr() now takes `rainfall_data`
-            #   (b) wrong type: must pass the full dict (needs `n_days` for
-            #       correct Pe_interval → Pe_daily conversion, thesis §4.5).
+            
             processor.calculate_iwr(
                 cwr_tif      = cwr_tif,
                 rainfall_data = rain_data,

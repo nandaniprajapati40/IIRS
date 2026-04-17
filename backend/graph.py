@@ -1,7 +1,6 @@
 
 # graph.py
 
-
 from fastapi import APIRouter, HTTPException, Query
 from pymongo import MongoClient
 from datetime import datetime

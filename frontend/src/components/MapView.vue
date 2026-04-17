@@ -24,14 +24,6 @@
 
     <!-- Kc Forecast Window Selector (shown only when Kc layer is active) -->
     <div class="forecast-window-bar" v-if="props.layers.kc">
-      <span class="fw-label">Kc</span>
-      <button
-        v-for="w in [{ key: null, label: 'Observed' }, { key: '5day', label: '5-day' }, { key: '10day', label: '10-day' }, { key: '15day', label: '15-day' }]"
-        :key="w.label"
-        class="fw-btn"
-        :class="{ active: selectedWindow === w.key }"
-        @click="selectForecastWindow(w.key)"
-      >{{ w.label }}</button>
     </div>
 
     <!-- Info Panel (shown on map click / My Location) -->

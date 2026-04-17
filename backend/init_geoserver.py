@@ -27,7 +27,7 @@ FIX-GEOSERVER-1 (2026-04-16):
   run (new store) and subsequent runs (existing layer refresh).
 
   push_to_geoserver() in main.py now checks return values and only logs
-  ✅ when configure_layer + assign_style both succeed, eliminating the
+  when configure_layer + assign_style both succeed, eliminating the
   false-positive "Forecast layer ready" messages.
 """
 

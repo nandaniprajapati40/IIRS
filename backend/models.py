@@ -35,7 +35,7 @@ KC_MODEL_PATH  = MODEL_DIR / "sarimax_wheat_kc.pkl"
 CWR_MAX = 15.0
 
 
-# Physics Wrappers (Thesis ke hisab se)
+# Physics Wrappers
 class _PhysicsIWR:
     def predict(self, cwr: np.ndarray, peff: np.ndarray) -> np.ndarray:
         return np.maximum(np.asarray(cwr) - np.asarray(peff), 0.0)

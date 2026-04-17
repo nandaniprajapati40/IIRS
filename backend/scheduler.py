@@ -1,7 +1,6 @@
 """
 scheduler.py — Sequential dynamic nightly pipeline
 ═══════════════════════════════════════════════════════════════════════════════
-[Keep the existing docstring...]
 """
 
 from __future__ import annotations

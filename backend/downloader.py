@@ -112,24 +112,7 @@ CHUNK_MAX_RETRIES  = 3
 # Seconds to wait between chunk retry attempts.
 CHUNK_RETRY_WAIT   = 15
 
-# ── Fixed download bounding box ────────────────────────────────────────────────
-# CRITICAL: the tile grid used for chunk downloads MUST be a fixed constant,
-# not the dynamic OSM/GADM/GEE bbox from config.  The dynamic bbox can shift
-# by 0.05–0.10° between runs (OSM regularly updates its district polygon), which
-# changes the tile grid and produces output files with different spatial extents.
-# Two files with different extents will misalign when overlaid in QGIS/GeoServer,
-# and pixels near the eastern/northern edge of the district are silently lost.
-#
-# This bbox deliberately extends ~0.05° beyond the widest observed district
-# boundary so it is guaranteed to fully contain the FAO/GAUL, GADM, and OSM
-# polygons.  The district mask applied in _merge_chunks clips the output to the
-# exact district shape — so this generosity costs nothing in output quality.
-#
-# Verified from gdalinfo on real downloaded scenes:
-#   East  max observed: 80°9'35" = 80.160° → use 80.22° for headroom
-#   West  max observed: 78°42'44" = 78.712° → use 78.62° for headroom
-#   North max observed: 29°23'1"  = 29.383° → use 29.46° for headroom
-#   South max observed: 28°42'1"  = 28.700° → use 28.62° for headroom
+
 DOWNLOAD_BBOX = {
     "west":  78.62,
     "east":  80.22,

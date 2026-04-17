@@ -44,7 +44,7 @@
             <span>{{ selectedCalendarDate ? formatDisplayDate(selectedCalendarDate) : 'Select Date' }}</span>
           </button>
 
-          <button @click="isDark = !isDark" class="icon-btn theme-btn">{{ isDark ? '☀️' : '🌙' }}</button>
+          <!-- <button @click="isDark = !isDark" class="icon-btn theme-btn">{{ isDark ? '☀️' : '🌙' }}</button> -->
           <button @click="showHome" class="home-btn">⌂ Home</button>
         </div>
       </header>
