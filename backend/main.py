@@ -408,50 +408,71 @@ def generate_history_rasters() -> int:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP B — FORECASTING  (Fixed - Thesis Compliant)
-# Only PET uses SARIMAX. Kc uses its own trained SARIMA + DOY adjustment.
-# CWR and IWR are computed purely physically (no SARIMA).
+# Only PET uses SARIMAX. Kc uses its own trained SARIMAx + DOY adjustment.
+
 # ═══════════════════════════════════════════════════════════════════════════
-
 def _project_kc_for_dates(future_dates: pd.DatetimeIndex) -> np.ndarray:
-    """Use trained Kc SARIMAX model + gentle DOY-based correction for short horizon."""
+    """Kc forecast with SARIMAX + stronger deterministic trend + seasonal variation."""
     kc_model, kc_meta = _get_model("kc")
+
+    last_kc_obs = _read_mean(history_path("kc", "today")) or 0.80
+    kc_1d_ago   = _read_mean(history_path("kc", "1")) or last_kc_obs
+    kc_3d_ago   = _read_mean(history_path("kc", "3")) or kc_1d_ago
+
     if kc_model is None:
-        logger.warning("[forecast] Kc model not available → using persistence")
-        last_kc = _read_mean(history_path("kc", "today")) or 0.80
-        return np.full(len(future_dates), float(last_kc))
+        base = np.full(len(future_dates), float(last_kc_obs))
+    else:
+        try:
+            exog_cols = kc_meta.get("exog_cols", ["doy_sin", "doy_cos"])
+            kc_exog = build_forecast_exog(
+                future_dates=future_dates,
+                exog_cols=exog_cols,
+            )
+            kc_fc = kc_model.get_forecast(steps=len(future_dates), exog=kc_exog)
+            base = kc_fc.predicted_mean.values.astype(float)
+        except Exception as e:
+            logger.warning(f"Kc SARIMAX failed: {e}")
+            base = np.full(len(future_dates), float(last_kc_obs))
 
-    try:
-        # FIX: model was trained with DOY exog — must supply matching exog at forecast time.
-        # Previously called kc_model.forecast(steps=...) with NO exog → always threw:
-        # "Out-of-sample operations in a model with a regression component require
-        #  additional exogenous values via the `exog` argument."
-        exog_cols = kc_meta.get("exog_cols", ["doy_sin", "doy_cos"])
-        kc_exog = build_forecast_exog(
-            future_dates=future_dates,
-            exog_cols=exog_cols,
-        )
-        kc_fc     = kc_model.get_forecast(steps=len(future_dates), exog=kc_exog)
-        kc_values = np.clip(kc_fc.predicted_mean.values, KC_MIN, KC_MAX)
+    days_ahead = np.arange(1, len(future_dates) + 1, dtype=float)
 
-        # Gentle DOY correction for wheat phenology (short horizon → small effect)
-        projected = []
-        last_kc_obs = _read_mean(history_path("kc", "today")) or 0.80
+    recent_slope_1 = last_kc_obs - kc_1d_ago
+    recent_slope_3 = (last_kc_obs - kc_3d_ago) / 3.0
+    blended_slope  = 0.6 * recent_slope_1 + 0.4 * recent_slope_3
 
-        for i, dt in enumerate(future_dates):
-            doy = dt.timetuple().tm_yday
-            # Very light seasonal nudge (max ±0.03 over 15 days)
-            seasonal_factor = 0.06 * np.sin(2 * np.pi * (doy - 60) / 365)  # peak around March
-            kc_proj = kc_values[i] * 0.87 + last_kc_obs * 0.15 + seasonal_factor
-            kc_proj = float(np.clip(kc_proj, KC_MIN, KC_MAX))
-            projected.append(kc_proj)
+    # Late-season maturity enforcement (Maturation Stage)
+    # Thesis §5.3: Kc falls from 1.15 to 0.40 in April.
+    ref_doy = future_dates[0].dayofyear
+    
+    if ref_doy >= 95: # Around April 5
+        # Enforce a negative slope if it's late season but history is flat/rising
+        maturation_slope = -0.022 # Kc drops ~0.3 over 15 days (Thesis §5.3)
+        if blended_slope > maturation_slope:
+            # Blend the observed slope with the expected phenological decline
+            blended_slope = 0.3 * blended_slope + 0.7 * maturation_slope
+            logger.info(f"Kc forecast: Maturity decline applied (doy={ref_doy}, slope_adj={blended_slope:.4f})")
 
-        return np.array(projected)
+    # Increase trend sensitivity to prevent persistence from damping the curve
+    trend = last_kc_obs + 0.85 * blended_slope * days_ahead
 
-    except Exception as e:
-        logger.warning(f"[forecast] Kc SARIMA failed: {e} → falling back to persistence")
-        last_kc = _read_mean(history_path("kc", "today")) or 0.80
-        return np.full(len(future_dates), float(last_kc))
+    doy = future_dates.dayofyear.values.astype(float)
+    seasonal = (
+        0.15 * np.sin(2 * np.pi * doy / 365.25) +
+        0.08 * np.cos(2 * np.pi * doy / 365.25)
+    )
 
+    # Shift weights from SARIMAX (persistence) even further towards Phenological Trend
+    kc_final = 0.15 * base + 0.75 * trend + seasonal
+    kc_final = np.clip(kc_final, KC_MIN, KC_MAX)
+
+    logger.info(
+        f"Kc forecast: last={last_kc_obs:.3f}, "
+        f"trend_mean={trend.mean():.3f}, "
+        f"slope={blended_slope:.4f}, "
+        f"range={kc_final.min():.3f}-{kc_final.max():.3f}"
+    )
+
+    return kc_final
 
 def _climatological_peff(future_dates: pd.DatetimeIndex) -> np.ndarray:
     """Fixed & simplified climatological effective rainfall for Rabi season."""
@@ -563,9 +584,15 @@ def create_forecast_raster(
             template_data = np.where(template_data == nodata, np.nan, template_data)
             profile       = src.profile.copy()
 
-        n_days          = WINDOW_DAYS[window]
-        window_forecast = forecast_series.iloc[:n_days]
-        forecast_mean   = float(window_forecast.mean())
+            WINDOW_SLICES = {
+                "5day": (0, 5),
+                "10day": (0, 10),
+                "15day": (0, 15),
+            }
+
+            start_idx, end_idx = WINDOW_SLICES[window]
+            window_forecast = forecast_series.iloc[start_idx:end_idx]
+            forecast_mean = float(window_forecast.mean())
 
         valid = ~np.isnan(template_data)
         if not valid.any():
@@ -646,16 +673,15 @@ def generate_all_forecast_rasters() -> int:
             for window in FORECAST_WINDOWS:
                 dst_path = forecast_path(param, slot, window)
 
-                if dst_path.exists():
-                    try:
-                        with rasterio.open(dst_path) as f:
-                            tags = f.tags()
-                            if tags.get("reference_date") == slot:
-                                n_rasters += 1
-                                total += 1
-                                continue
-                    except Exception:
-                        pass
+                # FORCED REGENERATION: Logic changes in main.py must be reflected immediately.
+                # Removing the skip check to ensure fresh forecasts whenever the pipeline runs.
+                template = history_path(param, slot)
+                if template.exists():
+                    if create_forecast_raster(
+                        param, slot, window, forecasts[param], template
+                    ):
+                        n_rasters += 1
+                        total += 1
 
                 template = history_path(param, slot)
                 if template.exists():
@@ -1001,7 +1027,7 @@ async def get_forecast(
         "forecasts":      {},
     }
 
-    for param in ("pet", "cwr", "iwr"):
+    for param in ("pet","kc", "cwr", "iwr"):
         if param in forecasts:
             series = forecasts[param]
             result["forecasts"][param] = {
@@ -1014,15 +1040,22 @@ async def get_forecast(
             }
 
     result["window_summaries"] = {}
-    for window in FORECAST_WINDOWS:
-        n_days = WINDOW_DAYS[window]
+    WINDOW_SLICES = {
+    "5day": (0, 5),   # days 1-5
+    "10day": (0, 10), # days 1-10 (Cumulative)
+    "15day": (0, 15), # days 1-15 (Cumulative)
+}
+
+
+
+    for window, (start_idx, end_idx) in WINDOW_SLICES.items():
         result["window_summaries"][window] = {}
         for param in ("kc", "cwr", "iwr"):
             if param in forecasts:
-                vals = forecasts[param].iloc[:n_days].values
+                vals = forecasts[param].iloc[start_idx:end_idx].values
                 result["window_summaries"][window][param] = {
-                    "mean":  round(float(np.mean(vals)),  4),
-                    "total": round(float(np.sum(vals)),   4),
+                    "mean": round(float(np.mean(vals)), 4),
+                    "total": round(float(np.sum(vals)), 4),
                 }
 
     return result
@@ -1135,23 +1168,23 @@ async def manual_refresh():
         logger.exception("Pipeline failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/api/model/info")
 async def model_info():
     """Return metadata for all loaded models."""
     pet_model, pet_meta = _get_model("pet")
+    kc_model, kc_meta   = _get_model("kc")
 
     def _meta_dict(model, meta):
         if meta is None:
             return {"available": False}
         return {
-            "available":          model is not None,
-            "note":               meta.get("note", ""),
-            "test_r2":            meta["metrics"].get("R2"),
-            "test_rmse":          meta["metrics"].get("RMSE"),
-            "test_mae":           meta["metrics"].get("MAE"),
-            "order":              meta.get("order"),
-            "exog_cols":          meta.get("exog_cols"),
+            "available": model is not None,
+            "note": meta.get("note", ""),
+            "test_r2": meta["metrics"].get("R2"),
+            "test_rmse": meta["metrics"].get("RMSE"),
+            "test_mae": meta["metrics"].get("MAE"),
+            "order": meta.get("order"),
+            "exog_cols": meta.get("exog_cols"),
             "last_training_date": (
                 meta["last_date"].strftime("%Y-%m-%d")
                 if meta.get("last_date") else None
@@ -1161,18 +1194,19 @@ async def model_info():
     return {
         "models": {
             "pet": _meta_dict(pet_model, pet_meta),
+            "kc": _meta_dict(kc_model, kc_meta),
         },
         "forecast_chain": {
             "step1": "PET forecasted with SARIMAX",
-            "step2": f"Kc projected from DOY + last observed Kc",
+            "step2": "Kc forecasted with SARIMAX + seasonal trend adjustment",
             "step3": "CWR = Kc_projected × PET_forecast  (FAO-56 Eq. 4)",
             "step4": "IWR = max(CWR − Peff_clim, 0)  (FAO-56 §4.5)",
         },
         "physical_relationships": {
             "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}",
-            "cwr":        "CWR = Kc × PET  (not forecasted — computed)",
-            "iwr":        "IWR = max(CWR − Peff, 0)  (not forecasted — computed)",
-            "peff":       "USDA-SCS on 5-day interval rainfall total",
+            "cwr": "CWR = Kc × PET  (computed)",
+            "iwr": "IWR = max(CWR − Peff, 0)  (computed)",
+            "peff": "USDA-SCS on 5-day interval rainfall total",
         },
     }
 

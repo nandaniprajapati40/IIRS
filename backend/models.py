@@ -206,7 +206,14 @@ def train_all_models() -> Dict[str, dict]:
     kc_exog = create_exog(kc_series.index)
 
     logger.info("Training SARIMAX for Kc...")
-    kc_model, kc_meta = train_sarimax(kc_series, exog=kc_exog, model_name="Kc")
+    # kc_model, kc_meta = train_sarimax(kc_series, exog=kc_exog, model_name="Kc")
+    kc_model, kc_meta = train_sarimax(
+    kc_series,
+    exog=kc_exog,
+    order=(1, 0, 1),
+    seasonal_order=(1, 0, 0, 7),
+    model_name="Kc"
+)
     save_model(kc_model, kc_meta, KC_MODEL_PATH)
     results["kc"] = kc_meta["metrics"]
 
