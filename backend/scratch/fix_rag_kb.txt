@@ -1,0 +1,31 @@
+            "cloud-free scenes are rare, introducing data gaps. (2) Pixel-level variability: 10 m Sentinel-2 pixels average "
+            "across heterogeneous microplots; very small or irregularly-shaped fields are misrepresented. (3) Phenology variability: "
+            "wheat ripens unevenly; SAVI from a uniform pixel may not reflect localized maturity. (4) Calibration drift: SAVI-to-Kc "
+            "regression is fitted on one growing season; performance may degrade if cultivars or soil properties shift. "
+            "Validation against in-situ measurements (crop cuts, water meters, lysimeters) is essential but labor-intensive. "
+            "For operational deployment, the system is most reliable at district/block scales; sub-field decisions benefit from "
+            "ground truth."
+        )
+    },
+
+    # ── CLIMATE CHANGE & ADAPTATION ──────────────────────────────────────────
+    {
+        "id": "climate_change",
+        "tags": ["climate change", "adaptation", "temperature", "rainfall", "future"],
+        "text": (
+            "Uttarakhand's climate is changing: temperatures are rising (~0.05°C/decade), monsoon onset is becoming erratic, "
+            "and frost events are less predictable. These shifts alter: (1) PET (higher temperature → higher PET). "
+            "(2) Crop phenology (warmer winters → earlier sowing, faster maturation). (3) Effective rainfall distribution "
+            "(erratic monsoon → more irrigation variability). AquaWatch's SARIMAX models implicitly adapt to recent climate by "
+            "training on recent data; but explicit trend detection and re-calibration are recommended annually. "
+            "Longer-term, satellite monitoring enables early warning for maladaptation—e.g., if wheat ripens too early due to heat, "
+            "IWR spikes are flagged, prompting farmers to shift sowing dates or adopt heat-tolerant varieties."
+        )
+    },
+
+]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LANGCHAIN RAG IMPLEMENTATION
+# ═════════════════════════════════════════════════════════════════════════════

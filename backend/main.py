@@ -12,9 +12,11 @@ import rasterio.warp
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from rasterio.enums import Resampling
 from rasterio.warp import transform as warp_transform
-
+import os
+from dotenv import load_dotenv
 from config import (
     STUDY_AREA, DIRECTORIES, GEOSERVER, SARIMAX_CONFIG,
     WHEAT_PARAMS
@@ -946,6 +948,13 @@ app.include_router(graph_router)
 
 from config import STUDY_AREA, EXACT_BOUNDARY
 
+
+class ChatRequest(BaseModel):
+    query: str
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    history: Optional[List[Dict]] = None
+
 @app.get("/api/boundary")
 async def get_boundary():
     """
@@ -1008,31 +1017,70 @@ async def get_boundary():
     }
 
 
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    """
+    RAG-powered chatbot endpoint.
+    Retrieves domain knowledge chunks, fetches live irrigation data,
+    then generates an answer via Gemini API with fallback behavior.
+    """
+    query = req.query.strip()
+    if not query:
+        return {
+            "answer": "Please ask a question about irrigation, crop water requirements, or the study region.",
+            "sources": [],
+            "live_data": {},
+        }
 
-def _maintenance_middleware_factory(app_instance):
-    from fastapi import Request
-    from fastapi.responses import JSONResponse
+    live_data: Dict[str, object] = {}
+    try:
+        dates = _latest_n_complete_dates(1)
+        if dates:
+            for param in ("savi", "kc", "cwr", "iwr"):
+                val = _read_mean(history_path(param, "today"))
+                if val is not None:
+                    live_data[param] = round(val, 3)
 
-    @app_instance.middleware("http")
-    async def _maintenance_gate(request: Request, call_next):
-        try:
-            from scheduler import MAINTENANCE_MODE as _mm
-        except ImportError:
-            _mm = False
-        if _mm and request.url.path not in ("/health", "/"):
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "detail": "System is updating data. Please retry in a few minutes.",
-                    "maintenance": True,
-                },
-            )
-        return await call_next(request)
+            if req.lat is not None and req.lon is not None:
+                live_data["query_location"] = f"lat={req.lat:.4f}, lon={req.lon:.4f}"
+                for param in ("savi", "kc", "cwr", "iwr"):
+                    p = history_path(param, "today")
+                    if not p.exists():
+                        continue
+                    try:
+                        with rasterio.open(p) as src:
+                            val = list(src.sample([(req.lon, req.lat)]))[0][0]
+                        if val != NODATA:
+                            live_data[f"point_{param}"] = round(float(val), 3)
+                    except Exception:
+                        logger.debug("[chat] failed point sample for %s", param, exc_info=True)
+    except Exception as e:
+        logger.warning(f"[chat] live data fetch failed: {e}")
 
-    return app_instance
+    try:
+        from rag_kb import get_chat_answer
+
+        rag_response = get_chat_answer(
+            query,
+            live_data=live_data or None,
+            history=req.history or [],
+        )
+        answer = rag_response.get("answer") or "I could not generate an answer right now."
+        source_ids = rag_response.get("sources", [])
+    except Exception as e:
+        logger.error(f"[chat] LangChain RAG failed: {e}", exc_info=True)
+        from rag_kb import fallback_answer
+
+        answer = fallback_answer(query)
+        source_ids = []
+
+    return {
+        "answer": answer,
+        "sources": source_ids,
+        "live_data": live_data,
+    }
 
 
-_maintenance_middleware_factory(app)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -1302,8 +1350,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
 
 

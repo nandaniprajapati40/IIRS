@@ -387,8 +387,8 @@ def start_scheduler(
     scheduler.add_job(
         func             = run_nightly_pipeline,
         trigger          = "cron",
-        hour             = 00,
-        minute           = 00,
+        hour             = 11,
+        minute           = 2,
         kwargs           = {
             "generate_callback":      generate_callback,
             "single_image_callback":  single_image_pipeline_callback,

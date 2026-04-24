@@ -3,7 +3,7 @@
     <!-- Controls -->
     <div class="chart-controls">
       <div class="control-group">
-        <label>Layer</label>
+        <label>Indicator</label>
         <div class="select-wrapper">
           <select v-model="selectedLayer" class="select">
             <option value="savi">SAVI - Soil Adjusted Vegetation Index</option>
@@ -18,7 +18,7 @@
       </div>
 
       <div class="control-group">
-        <label>Mode</label>
+        <label>View</label>
         <div class="toggle-switch">
           <button class="toggle-option" :class="{ active: mode === 'monthly' }" @click="mode = 'monthly'">
             Monthly
@@ -67,6 +67,19 @@
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import Chart from 'chart.js/auto'
 
+const canvasBackgroundPlugin = {
+  id: 'canvasBackgroundPlugin',
+  beforeDraw(chartInstance) {
+    const { ctx, width, height } = chartInstance
+    ctx.save()
+    ctx.fillStyle = '#fff'; // Light background
+    ctx.fillRect(0, 0, width, height)
+    ctx.restore()
+  }
+}
+
+Chart.register(canvasBackgroundPlugin)
+
 const props = defineProps({
   isDark: { type: Boolean, default: true },
   title: { type: String, default: 'Wheat Crop Parameters - Historical Data' },
@@ -85,18 +98,17 @@ const error = ref(null)
 // API Base URL - make sure this matches your backend
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-// Vivid colors that pop on dark AND light backgrounds
 const YEAR_COLORS = [
-  '#38bdf8', // sky blue
-  '#f472b6', // pink
-  '#4ade80', // green
-  '#fb923c', // orange
-  '#a78bfa', // violet
-  '#facc15', // yellow
-  '#34d399', // emerald
-  '#f87171', // red
-  '#60a5fa', // blue
-  '#e879f9', // fuchsia
+  '#0f4c81',
+  '#1f7a5c',
+  '#d97706',
+  '#c2410c',
+  '#0f766e',
+  '#b91c1c',
+  '#7c3aed',
+  '#4b5563',
+  '#0284c7',
+  '#65a30d',
 ]
 
 // ─── Fetch from FastAPI ────────────────────────────────────────────────────────
@@ -148,21 +160,22 @@ function renderChart(data) {
     chart = null
   }
 
-  const isDark = props.isDark
-  const textColor  = isDark ? '#cbd5e1' : '#1e293b'
-  const gridColor  = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'
-  const tooltipBg  = isDark ? '#0f172a' : '#ffffff'
+  // Light theme colors
+  const textColor = '#222';
+  const gridColor = 'rgba(60, 60, 60, 0.08)';
+  const tooltipBg = '#fff';
+  const tooltipBorder = '#222';
   const unitLabel  = `${data.layer_config?.full_name || data.layer || 'Value'} (${data.layer_config?.unit || ''})`
 
   if (mode.value === 'monthly') {
-    renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel, isDark })
+    renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, tooltipBorder, unitLabel })
   } else {
-    renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, unitLabel, isDark })
+    renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, tooltipBorder, unitLabel })
   }
 }
 
 // ─── Monthly: single continuous time-series line ──────────────────────────────
-function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }) {
+function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, tooltipBorder, unitLabel }) {
   // Build flat time-series labels like "Jan 2021", "Feb 2021", …
   const labels = []
   const values = []
@@ -180,10 +193,11 @@ function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }
     return
   }
 
-  const color = '#38bdf8'  // bright sky blue — visible on dark bg
-  const gradient = ctx.createLinearGradient(0, 0, 0, 420)
-  gradient.addColorStop(0, color + '66')
-  gradient.addColorStop(1, color + '00')
+
+  const color = '#3b9fd9';
+  const gradient = ctx.createLinearGradient(0, 0, 0, 420);
+  gradient.addColorStop(0, color + '22'); // lighter fill
+  gradient.addColorStop(1, color + '00');
 
   chart = new Chart(ctx, {
     type: 'line',
@@ -194,12 +208,12 @@ function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }
         data: values,
         borderColor: color,
         backgroundColor: gradient,
-        borderWidth: 2.5,
+        borderWidth: 2.8,
         tension: 0.35,
-        pointRadius: 3.5,
+        pointRadius: 3,
         pointHoverRadius: 7,
         pointBackgroundColor: color,
-        pointBorderColor: '#ffffff',
+        pointBorderColor: '#fff',
         pointBorderWidth: 2,
         fill: true,
         spanGaps: false
@@ -210,17 +224,25 @@ function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
+        canvasBackgroundPlugin: {
+          color: '#fff'
+        },
         legend: {
           display: true,
           position: 'top',
           align: 'end',
-          labels: { color: textColor, font: { size: 12 }, boxWidth: 24, padding: 16 }
+          labels: {
+            color: textColor,
+            font: { size: 12, family: "'Inter', 'Segoe UI', sans-serif", weight: '600' },
+            boxWidth: 24,
+            padding: 16
+          }
         },
         tooltip: {
           backgroundColor: tooltipBg,
           titleColor: textColor,
           bodyColor: textColor,
-          borderColor: gridColor,
+          borderColor: tooltipBorder,
           borderWidth: 1,
           padding: 12,
           callbacks: {
@@ -236,7 +258,7 @@ function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }
           grid: { color: gridColor },
           ticks: {
             color: textColor,
-            font: { size: 10 },
+            font: { size: 10, family: "'Inter', 'Segoe UI', sans-serif", weight: '500' },
             maxRotation: 45,
             autoSkip: true,
             maxTicksLimit: 24
@@ -244,8 +266,16 @@ function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }
         },
         y: {
           grid: { color: gridColor },
-          ticks: { color: textColor, font: { size: 11 } },
-          title: { display: true, text: unitLabel, color: textColor, font: { size: 12 } }
+          ticks: {
+            color: textColor,
+            font: { size: 11, family: "'Inter', 'Segoe UI', sans-serif", weight: '500' }
+          },
+          title: {
+            display: true,
+            text: unitLabel,
+            color: textColor,
+            font: { size: 12, family: "'Inter', 'Segoe UI', sans-serif", weight: '600' }
+          }
         }
       }
     }
@@ -253,7 +283,7 @@ function renderMonthly(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }
 }
 
 // ─── Cumulative: multi-series spline, one line per year ───────────────────────
-function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, unitLabel }) {
+function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, tooltipBorder, unitLabel }) {
   if (!data.data || data.data.length === 0) {
     error.value = 'No cumulative data available'
     return
@@ -266,9 +296,9 @@ function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, unitLabe
       data: yearData.cumulative ?? [],
       borderColor: color,
       backgroundColor: color + '18',
-      borderWidth: 2.5,
-      tension: 0.45,
-      pointRadius: 4,
+      borderWidth: 2.6,
+      tension: 0.42,
+      pointRadius: 3,
       pointHoverRadius: 8,
       pointBackgroundColor: color,
       pointBorderColor: '#ffffff',
@@ -289,12 +319,15 @@ function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, unitLabe
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
+        canvasBackgroundPlugin: {
+          color: '#fff'
+        },
         legend: {
           display: true,
           position: 'bottom',
           labels: {
             color: textColor,
-            font: { size: 12 },
+            font: { size: 12, family: "'Inter', 'Segoe UI', sans-serif", weight: '600' },
             boxWidth: 28,
             padding: 16,
             usePointStyle: true,
@@ -305,7 +338,7 @@ function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, unitLabe
           backgroundColor: tooltipBg,
           titleColor: textColor,
           bodyColor: textColor,
-          borderColor: gridColor,
+          borderColor: tooltipBorder,
           borderWidth: 1,
           padding: 12,
           callbacks: {
@@ -319,16 +352,22 @@ function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, unitLabe
       scales: {
         x: {
           grid: { color: gridColor },
-          ticks: { color: textColor, font: { size: 11 } }
+          ticks: {
+            color: textColor,
+            font: { size: 11, family: "'Inter', 'Segoe UI', sans-serif", weight: '500' }
+          }
         },
         y: {
           grid: { color: gridColor },
-          ticks: { color: textColor, font: { size: 11 } },
+          ticks: {
+            color: textColor,
+            font: { size: 11, family: "'Inter', 'Segoe UI', sans-serif", weight: '500' }
+          },
           title: {
             display: true,
             text: `Cumulative ${unitLabel}`,
             color: textColor,
-            font: { size: 12 }
+            font: { size: 12, family: "'Inter', 'Segoe UI', sans-serif", weight: '600' }
           }
         }
       }
@@ -371,7 +410,10 @@ onUnmounted(() => {
   flex-direction: column;
   padding: 1.5rem;
   gap: 0;
-  background: transparent;
+  background: #fff;
+  color: #1b485f;
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  border-radius: 18px;
 }
 
 /* ── Controls ── */
@@ -391,13 +433,9 @@ onUnmounted(() => {
 
 .control-group label {
   font-size: 0.875rem;
-  font-weight: 500;
-  color: #64748b;
+  font-weight: 600;
+  color: #0d1012;
   white-space: nowrap;
-}
-
-:global(.dark) .control-group label {
-  color: #94a3b8;
 }
 
 /* Select */
@@ -407,25 +445,20 @@ onUnmounted(() => {
 
 .select {
   padding: 0.45rem 2.25rem 0.45rem 1rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid rgba(200, 210, 220, 0.2);
   border-radius: 30px;
-  background: #ffffff;
+  background: #0d1319;
   font-size: 0.875rem;
-  color: #1e293b;
+  color: #f0f4f8;
   outline: none;
   cursor: pointer;
   appearance: none;
   min-width: 260px;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.select:hover { border-color: #3b82f6; }
-
-:global(.dark) .select {
-  background: #1e293b;
-  border-color: #334155;
-  color: #e2e8f0;
-}
+.select:hover { border-color: #2f855a; }
+.select:focus { border-color: #2b6cb0; box-shadow: 0 0 0 4px rgba(43, 108, 176, 0.12); }
 
 .select-arrow {
   position: absolute;
@@ -433,20 +466,16 @@ onUnmounted(() => {
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  color: #64748b;
+  color: #8899aa;
 }
 
 /* Toggle */
 .toggle-switch {
   display: flex;
-  background: #f1f5f9;
+  background: rgba(40, 95, 150, 0.1);
   border-radius: 30px;
   padding: 3px;
   gap: 2px;
-}
-
-:global(.dark) .toggle-switch {
-  background: #334155;
 }
 
 .toggle-option {
@@ -456,22 +485,15 @@ onUnmounted(() => {
   border-radius: 30px;
   font-size: 0.875rem;
   font-weight: 500;
-  color: #64748b;
+  color: #8899aa;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-:global(.dark) .toggle-option { color: #94a3b8; }
-
 .toggle-option.active {
-  background: #ffffff;
-  color: #2563eb;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
-}
-
-:global(.dark) .toggle-option.active {
-  background: #1e293b;
-  color: #60a5fa;
+  background: #2f855a;
+  color: #f0f4f8;
+  box-shadow: 0 6px 16px rgba(47, 133, 90, 0.3);
 }
 
 /* Badge */
@@ -481,18 +503,12 @@ onUnmounted(() => {
   gap: 0.4rem;
   margin-left: auto;
   padding: 0.35rem 0.85rem;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: rgba(47, 133, 90, 0.15);
+  border: 1px solid rgba(47, 133, 90, 0.3);
   border-radius: 20px;
   font-size: 0.78rem;
   font-weight: 500;
-  color: #2563eb;
-}
-
-:global(.dark) .chart-type-badge {
-  background: #1e3a5f;
-  border-color: #1e40af;
-  color: #93c5fd;
+  color: #3b9fd9;
 }
 
 /* Loading */
@@ -503,15 +519,15 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
-  color: #64748b;
+  color: #8899aa;
   font-size: 0.9rem;
 }
 
 .spinner {
   width: 36px;
   height: 36px;
-  border: 3px solid #e2e8f0;
-  border-top-color: #3b82f6;
+  border: 3px solid rgba(200, 210, 220, 0.2);
+  border-top-color: #2f855a;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -525,26 +541,30 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 0.6rem;
-  color: #ef4444;
+  color: #f87171;
   font-size: 0.9rem;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: rgba(127, 29, 29, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.3);
   border-radius: 12px;
   padding: 1.5rem;
   margin: 1rem 0;
 }
 
 :global(.dark) .error-box {
-  background: #3b0f0f;
-  border-color: #7f1d1d;
+  background: rgba(127, 29, 29, 0.3);
+  border-color: rgba(248, 113, 113, 0.4);
 }
 
 /* Chart */
 .chart-wrapper {
   flex: 1;
   min-height: 0;
-  height: 0;          
+  height: 0;
   position: relative;
+  background: #fff;
+  border: 1px solid rgba(60, 60, 60, 0.08);
+  border-radius: 16px;
+  padding: 0.75rem;
 }
 
 .chart {

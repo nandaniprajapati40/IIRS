@@ -27,7 +27,7 @@
     </div>
 
     <!-- Info Panel (shown on map click / My Location) -->
-    <div class="info-panel" v-if="pointData">
+    <div class="info-panel" v-if="pointData" :class="{ 'light': !isDarkMode }">
       <h3>📍 Selected Point</h3>
 
       <!-- Sentinel acquisition date + coordinates -->
@@ -45,6 +45,14 @@
           {{ pointData.lat?.toFixed(5) }}°N,&nbsp;{{ pointData.lon?.toFixed(5) }}°E
         </span>
       </div>
+      <div class="meta-row weather-row" @click="weatherVisible = true">
+        <span class="meta-icon">🌤️</span>
+        <span class="meta-label">Weather</span>
+        <span class="meta-val weather-link">
+          <span class="weather-date-line">{{ props.weatherSummary?.dateLabel || 'Today' }}</span>
+          <span class="weather-location-line">{{ props.weatherSummary?.location || 'Selected Location' }}</span>
+        </span>
+      </div>
 
       <!-- No active layer hint -->
       <p v-if="activeLayers.length === 0" class="nodata-hint">
@@ -55,15 +63,10 @@
       <div v-for="layer in activeLayers" :key="layer.name" class="value-section">
         <h4>{{ layer.displayName }}</h4>
 
-        <!-- Current pixel value (from /api/point) -->
-        <div class="forecast-table">
-          <div class="fc-row fc-header">
-            <span>Period</span>
-            <span>Value</span>
-          </div>
-
-          <!-- Observed (satellite pixel) -->
-          <div class="fc-row">
+        <div class="forecast-grid">
+          <!-- Observed (satellite pixel / current) -->
+          <div class="fc-item" :class="{ 'fc-item--active': selectedWindow === null && layer.name === 'kc' }"
+               @click="layer.name === 'kc' && selectForecastWindow(null)">
             <span class="fc-label observed-label">Today</span>
             <span v-if="pointData.values?.[layer.name] != null"
                   class="value" :style="getValueStyle(layer.name, pointData.values[layer.name])">
@@ -73,49 +76,35 @@
             <span v-else class="nodata-chip">No data</span>
           </div>
 
-          <!-- 5/10/15-day forecast — Kc only -->
-          <template v-if="forecastData && layer.name === 'kc'">
-            <div class="fc-row" v-for="w in [['5day','5-day'], ['10day','10-day'], ['15day','15-day']]" :key="w[0]">
-              <span class="fc-label" :class="{ 'fc-label--active': selectedWindow === w[0] }">{{ w[1] }} avg</span>
-              <span v-if="forecastData?.kc?.[w[0]] != null"
+          <!-- 5/10/15-day forecast — Kc and SAVI (derived) -->
+          <template v-if="forecastData && (layer.name === 'kc' || layer.name === 'savi')">
+            <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]"
+                 :class="{ 'fc-item--active': selectedWindow === w[0] && layer.name === 'kc' }"
+                 @click="layer.name === 'kc' && selectForecastWindow(w[0])">
+              <span class="fc-label">{{ w[1] }} avg</span>
+              <span v-if="layer.name === 'kc' && forecastData?.kc?.[w[0]] != null"
                     class="value"
                     :style="getValueStyle('kc', forecastData.kc[w[0]])">
                 {{ format(forecastData.kc[w[0]]) }}
-                <em class="unit"></em>
+              </span>
+              <span v-else-if="layer.name === 'savi' && forecastData?.kc?.[w[0]] != null"
+                    class="value"
+                    :style="getValueStyle('savi', calculateSaviFromKc(forecastData.kc[w[0]]))">
+                {{ format(calculateSaviFromKc(forecastData.kc[w[0]])) }}
               </span>
               <span v-else class="nodata-chip">—</span>
             </div>
           </template>
 
-          <!-- 5-day forecast — CWR / IWR only -->
+          <!-- 5/10/15-day forecast — CWR / IWR -->
           <template v-if="forecastData && (layer.name === 'cwr' || layer.name === 'iwr')">
-            <div class="fc-row">
-              <span class="fc-label">5-day avg</span>
-              <span v-if="forecastData?.[layer.name]?.['5day'] != null"
+            <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]">
+              <span class="fc-label">{{ w[1] }} avg</span>
+              <span v-if="forecastData?.[layer.name]?.[w[0]] != null"
                     class="value"
-                    :style="getValueStyle(layer.name, forecastData[layer.name]['5day'])">
-                {{ format(forecastData[layer.name]['5day']) }}
-                <em class="unit">mm/day</em>
-              </span>
-              <span v-else class="nodata-chip">—</span>
-            </div>
-            <div class="fc-row">
-              <span class="fc-label">10-day avg</span>
-              <span v-if="forecastData?.[layer.name]?.['10day'] != null"
-                    class="value"
-                    :style="getValueStyle(layer.name, forecastData[layer.name]['10day'])">
-                {{ format(forecastData[layer.name]['10day']) }}
-                <em class="unit">mm/day</em>
-              </span>
-              <span v-else class="nodata-chip">—</span>
-            </div>
-            <div class="fc-row">
-              <span class="fc-label">15-day avg</span>
-              <span v-if="forecastData?.[layer.name]?.['15day'] != null"
-                    class="value"
-                    :style="getValueStyle(layer.name, forecastData[layer.name]['15day'])">
-                {{ format(forecastData[layer.name]['15day']) }}
-                <em class="unit">mm/day</em>
+                    :style="getValueStyle(layer.name, forecastData[layer.name][w[0]])">
+                {{ format(forecastData[layer.name][w[0]]) }}
+                <em class="unit">{{ layer.name === 'cwr' || layer.name === 'iwr' ? 'mm' : '' }}</em>
               </span>
               <span v-else class="nodata-chip">—</span>
             </div>
@@ -128,22 +117,83 @@
     </div>
 
     <!-- Location Button -->
-    <button class="location-btn" @click="getCurrentLocation" :class="{ 'loading': isLocating }" :disabled="isLocating">
-      <span class="location-icon">◉</span>
-      <span class="location-text">{{ isLocating ? 'Locating...' : 'My Location' }}</span>
-    </button>
-
-    <!-- Chart Toggle Button -->
-    <button class="chart-toggle-btn" @click="toggleChart" :class="{ active: isChartVisible }">
-      <span class="chart-icon">📊</span>
-      <span class="chart-text">{{ isChartVisible ? 'Hide Chart' : 'Show Chart' }}</span>
+    <button
+      class="location-btn"
+      @click="getCurrentLocation"
+      :class="{ loading: isLocating }"
+      :disabled="isLocating"
+      :title="isLocating ? 'Detecting your location' : 'Use current location'"
+      :aria-label="isLocating ? 'Detecting your location' : 'Use current location'"
+    >
+      <span class="location-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1">
+          <circle cx="12" cy="12" r="3.5" />
+          <path stroke-linecap="round" d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" />
+        </svg>
+      </span>
+      <span class="location-spinner" v-if="isLocating" aria-hidden="true"></span>
     </button>
 
     <!-- Chart Panel -->
-    <div class="chart-panel" v-if="isChartVisible">
-      <button class="close-btn" @click="isChartVisible = false">×</button>
+    <div class="chart-panel" v-if="props.chartVisible">
+      <button class="close-btn" @click="emit('update:chart-visible', false)">×</button>
       <DataChart title="Wheat Crop Parameters - Historical Data" :initial-layer="activeLayers[0]?.name || 'savi'"
-        :is-dark="isDarkMode" :show-boundary-data="true" />
+        :is-dark="false" :show-boundary-data="true" />
+    </div>
+
+    <!-- Weather Panel -->
+    <div class="weather-panel" v-if="weatherVisible">
+      <button class="close-btn" @click="weatherVisible = false">×</button>
+      <div class="weather-content">
+        <h2 class="weather-title">🌤️ Weather Forecast</h2>
+        
+        <div class="weather-header">
+          <div class="weather-location-info">
+            <p class="location-name">{{ props.weatherSummary?.location || 'Selected Location' }}</p>
+            <p class="location-coords" v-if="pointData">
+              {{ pointData.lat?.toFixed(4) }}°N, {{ pointData.lon?.toFixed(4) }}°E
+            </p>
+          </div>
+          <p class="weather-date">{{ props.weatherSummary?.dateLabel || 'Today' }}</p>
+        </div>
+
+        <div class="weather-grid">
+          <div class="weather-card" v-if="props.weatherSummary?.temperature">
+            <span class="weather-icon">🌡️</span>
+            <span class="weather-label">Temperature</span>
+            <span class="weather-value">{{ props.weatherSummary.temperature }}°C</span>
+          </div>
+          <div class="weather-card" v-if="props.weatherSummary?.humidity">
+            <span class="weather-icon">💧</span>
+            <span class="weather-label">Humidity</span>
+            <span class="weather-value">{{ props.weatherSummary.humidity }}%</span>
+          </div>
+          <div class="weather-card" v-if="props.weatherSummary?.windSpeed">
+            <span class="weather-icon">💨</span>
+            <span class="weather-label">Wind Speed</span>
+            <span class="weather-value">{{ props.weatherSummary.windSpeed }} m/s</span>
+          </div>
+          <div class="weather-card" v-if="props.weatherSummary?.rainfall">
+            <span class="weather-icon">🌧️</span>
+            <span class="weather-label">Rainfall</span>
+            <span class="weather-value">{{ props.weatherSummary.rainfall }} mm</span>
+          </div>
+          <div class="weather-card" v-if="props.weatherSummary?.solarRadiation">
+            <span class="weather-icon">☀️</span>
+            <span class="weather-label">Solar Radiation</span>
+            <span class="weather-value">{{ props.weatherSummary.solarRadiation }} MJ/m²</span>
+          </div>
+          <div class="weather-card" v-if="props.weatherSummary?.windDirection">
+            <span class="weather-icon">🧭</span>
+            <span class="weather-label">Wind Direction</span>
+            <span class="weather-value">{{ props.weatherSummary.windDirection }}°</span>
+          </div>
+        </div>
+
+        <p v-if="!props.weatherSummary" class="no-weather-data">
+          No weather data available for this location.
+        </p>
+      </div>
     </div>
   </div>
 </template>
@@ -180,14 +230,25 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  weatherSummary: {
+    type: Object,
+    default: null
+  },
+  chartVisible: {
+    type: Boolean,
+    default: false
+  },
   isDark: {
     type: Boolean,
     default: true   // dashboard is dark by default
   }
 })
 
+const emit = defineEmits(['location-selected', 'calendar-open', 'open-weather', 'update:chart-visible'])
+
 // Add slot to date map for display
 const slotToDateMap = ref({})
+const weatherVisible = ref(false)
 
 // Create slotToDateMap from availableDates
 watch(() => props.availableDates, (dates) => {
@@ -207,11 +268,21 @@ let boundaryLayer = null
 let wmsLayers = {}
 const pointData = ref(null)
 const forecastData = ref(null)
+
+// SAVI-Kc relationship constants for derived forecast
+const SAVI_KC_SLOPE = 1.2088
+const SAVI_KC_INTERCEPT = 0.5375
+
+// Helper to calculate SAVI from Kc forecast
+function calculateSaviFromKc(kcValue) {
+  if (kcValue == null) return null
+  return (kcValue - SAVI_KC_INTERCEPT) / SAVI_KC_SLOPE
+}
+
 const isForecastLoading = ref(false)
 const boundaryLoaded = ref(false)
-const currentMapStyle = ref('Dark')
+const currentMapStyle = ref('street')
 const isStyleDropdownOpen = ref(false)
-const isChartVisible = ref(false)
 // isDarkMode is now derived from the isDark prop passed by App.vue
 const isDarkMode = computed(() => props.isDark)
 const isLocating = ref(false)
@@ -226,22 +297,22 @@ let kcForecastLayer = null
 // Map style options
 const mapStyles = [
   {
-    name: 'Dark',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '© CartoDB',
-    icon: '🌙'
-  },
-  {
-    name: 'Street',
+    name: 'street',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: '© OpenStreetMap',
-    icon: '🗺️'
+    // icon: 'Field'
+  },
+  {
+    name: 'Focus',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '© CartoDB',
+    // icon: 'Focus'
   },
   {
     name: 'Satellite',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     attribution: '© Esri',
-    icon: '🛰️'
+    // icon: 'Satellite'
   }
 ]
 
@@ -598,10 +669,11 @@ async function loadBoundary() {
 
     boundaryLayer = L.geoJSON(data.geojson, {
       style: {
-        color: '#ff7800',
-        weight: 3,
+        color: '#19c7a6',
+        weight: 2.5,
         fill: false,
-        dashArray: '5, 5'
+        opacity: 0.9,
+        dashArray: '7, 5'
       }
     }).addTo(map)
 
@@ -669,6 +741,7 @@ async function getCurrentLocation() {
 
     await fetchPointData(latitude, longitude)
     map.flyTo([latitude, longitude], 12, { duration: 1.5 })
+    emit('location-selected', { lat: latitude, lon: longitude })
 
     userLocationMarker = L.marker([latitude, longitude], {
       icon: L.divIcon({
@@ -713,12 +786,46 @@ async function getCurrentLocation() {
 // Handle map click
 async function onMapClick(e) {
   const { lat, lng } = e.latlng
-  await fetchPointData(lat, lng)
-}
+  
+  const popup = L.popup({
+    className: `custom-value-popup ${!isDarkMode.value ? 'light' : ''}`,
+    closeButton: false,
+    offset: [0, -10],
+    autoPan: false
+  })
+  .setLatLng([lat, lng])
+  .setContent('<div class="popup-loading"><span>⏳</span> Fetching...</div>')
+  .openOn(map)
 
-// Toggle chart visibility
-function toggleChart() {
-  isChartVisible.value = !isChartVisible.value
+  await fetchPointData(lat, lng)
+  emit('location-selected', { lat, lon: lng })
+
+  if (pointData.value) {
+    const activeWithData = activeLayers.value.filter(l => pointData.value.values?.[l.name] != null)
+    
+    if (activeWithData.length > 0) {
+      let content = `<div class="popup-content-multi">`
+      activeWithData.forEach(layer => {
+        const val = pointData.value.values[layer.name]
+        const formattedVal = val.toFixed(3)
+        const unit = layerUnit(layer.name)
+        content += `
+          <div class="popup-row">
+            <span class="value-layer">${layer.displayName}:</span>
+            <span class="value-num">${formattedVal}</span>
+            <span class="value-unit">${unit}</span>
+          </div>
+        `
+      })
+      content += `</div>`
+      popup.setContent(content)
+    } else {
+      popup.setContent('<div class="popup-content no-data">No layer data here</div>')
+      setTimeout(() => { if (map.hasLayer(popup)) map.closePopup(popup) }, 2000)
+    }
+  } else {
+    map.closePopup(popup)
+  }
 }
 
 // Apply filter method (exposed to parent)
@@ -793,18 +900,24 @@ defineExpose({
 </script>
 
 <style scoped>
-/* Keep all your existing styles here - they remain unchanged */
+
 .map-container {
   width: 100%;
   height: 100%;
+  min-height: 0;
   position: relative;
+  overflow: hidden;
   font-family: 'Space Grotesk', 'JetBrains Mono', sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(25, 199, 166, 0.08), transparent 24%),
+    linear-gradient(180deg, #050810 0%, #080c14 100%);
 }
 
 #map {
   width: 100%;
   height: 100%;
-  background: #060E1A;
+  min-height: 0;
+  background: #0a0f14;
 }
 
 /* ─── Shared pill / card base ───────────────────────────── */
@@ -814,22 +927,22 @@ defineExpose({
   gap: 7px;
   padding: 9px 16px;
   border-radius: 50px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(4, 15, 36, 0.92);
+  border: 1px solid rgba(200, 210, 220, 0.12);
+  background: rgba(10, 15, 20, 0.9);
   backdrop-filter: blur(14px);
-  color: #C8DFF0;
+  color: #d0dbe5;
   font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.3);
   transition: all 0.2s ease;
   white-space: nowrap;
 }
 .pill-btn:hover {
-  border-color: rgba(0,212,168,0.5);
-  color: #00D4A8;
+  border-color: rgba(47, 133, 90, 0.5);
+  color: #3b9fd9;
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 /* ─── Map Style Dropdown ────────────────────────────────── */
@@ -847,37 +960,37 @@ defineExpose({
   align-items: center;
   gap: 8px;
   padding: 9px 14px;
-  border-radius: 50px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(4, 15, 36, 0.92);
+  border-radius: 999px;
+  border: 1px solid rgba(200, 210, 220, 0.1);
+  background: rgba(5, 8, 14, 0.9);
   backdrop-filter: blur(14px);
-  color: #C8DFF0;
+  color: #d0dbe5;
   font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.4);
   transition: all 0.2s ease;
 }
 
 .dropdown-toggle:hover {
-  border-color: rgba(0,212,168,0.5);
-  color: #00D4A8;
+  border-color: rgba(25, 199, 166, 0.5);
+  color: #f0f4f8;
   transform: translateY(-1px);
 }
 
-.style-icon { font-size: 1rem; }
+.style-icon { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #8899aa; }
 .style-name  { flex: 1; }
-.dropdown-arrow { font-size: 0.7rem; opacity: 0.6; }
+.dropdown-arrow { font-size: 0.7rem; opacity: 0.6; color: #8899aa; }
 
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   width: 100%;
-  background: rgba(4, 15, 36, 0.97);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(5, 8, 14, 0.96);
+  border: 1px solid rgba(200, 210, 220, 0.1);
   border-radius: 16px;
-  box-shadow: 0 12px 32px rgba(0,0,0,0.55);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
   animation: dropdownFadeIn 0.18s ease;
 }
@@ -896,87 +1009,132 @@ defineExpose({
   border: none;
   background: transparent;
   cursor: pointer;
-  color: #6B8BAD;
+  color: #8899aa;
   font-size: 0.82rem;
   font-weight: 500;
   transition: all 0.18s;
   text-align: left;
 }
-.dropdown-item:hover { background: rgba(255,255,255,0.05); color: #E8F4FD; }
-.dropdown-item.active { background: rgba(0,212,168,0.12); color: #00D4A8; }
-.check-mark { margin-left: auto; font-weight: 700; color: #00D4A8; }
+.dropdown-item:hover { background: rgba(47, 133, 90, 0.15); color: #f0f4f8; }
+.dropdown-item.active { background: rgba(47, 133, 90, 0.2); color: #3b9fd9; }
+.check-mark { margin-left: auto; font-weight: 700; color: #3b9fd9; }
 
 /* ─── Info Panel ────────────────────────────────────────── */
 .info-panel {
   position: absolute;
   bottom: 70px;
   left: 16px;
-  background: rgba(4, 15, 36, 0.96);
+  background:
+    linear-gradient(180deg, rgba(5, 8, 14, 0.96), rgba(8, 12, 18, 0.94)),
+    radial-gradient(circle at top right, rgba(25, 199, 166, 0.08), transparent 34%);
   backdrop-filter: blur(16px);
   padding: 18px 18px 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(0,212,168,0.2);
+  border-radius: 22px;
+  border: 1px solid rgba(200, 210, 220, 0.1);
   z-index: 1000;
-  max-width: 300px;
+  width: 360px;
+  max-width: 90vw;
   max-height: 75vh;
   overflow-y: auto;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.55);
-  color: #C8DFF0;
+  box-shadow: 0 24px 52px rgba(0, 0, 0, 0.5);
+  color: #f0f4f8;
   scrollbar-width: thin;
-  scrollbar-color: rgba(0,212,168,0.2) transparent;
+  scrollbar-color: rgba(47, 133, 90, 0.3) transparent;
+  transition: all 0.3s ease;
 }
+
+.info-panel.light {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(47, 133, 90, 0.24);
+  color: #1e293b;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+
+.info-panel.light h3 { color: #2f855a; }
+.info-panel.light .meta-row { background: rgba(0, 0, 0, 0.04); }
+.info-panel.light .meta-label { color: #64748b; }
+.info-panel.light .meta-val { color: #0f172a; }
+.info-panel.light .sentinel-date { color: #2f855a; }
+.info-panel.light .coord-val { color: #334155; }
+.info-panel.light .fc-item { background: rgba(0, 0, 0, 0.03); }
+.info-panel.light .fc-label { color: #64748b; }
+.info-panel.light .value-section { border-top-color: rgba(0, 0, 0, 0.08); }
+.info-panel.light .value-section h4 { color: #334155; }
+.info-panel.light .loading-hint { color: #64748b; }
+.info-panel.light .close-btn { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.1); color: #64748b; }
+.info-panel.light .close-btn:hover { background: rgba(47, 133, 90, 0.1); color: #2f855a; border-color: rgba(47, 133, 90, 0.28); }
 .info-panel::-webkit-scrollbar { width: 4px; }
-.info-panel::-webkit-scrollbar-thumb { background: rgba(0,212,168,0.2); border-radius: 2px; }
+.info-panel::-webkit-scrollbar-thumb { background: rgba(47, 133, 90, 0.2); border-radius: 2px; }
 
 .meta-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border-radius: 9px;
-  background: rgba(0,0,0,0.22);
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(200, 210, 220, 0.06);
   margin-bottom: 6px;
   font-family: 'JetBrains Mono', monospace;
 }
 .meta-icon  { font-size: 0.9rem; flex-shrink: 0; }
-.meta-label { color: #4A6A8A; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.67rem; flex-shrink: 0; }
-.meta-val   { margin-left: auto; font-weight: 600; text-align: right; font-size: 0.73rem; }
-.sentinel-date { color: #00D4A8; }
-.coord-val     { color: #8AACCC; font-size: 0.7rem; }
-
-.forecast-table {
+.meta-label { color: #8899aa; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.67rem; flex-shrink: 0; }
+.meta-val   { margin-left: auto; font-weight: 600; text-align: right; font-size: 0.73rem; color: #d0dbe5; }
+.sentinel-date { color: #3b9fd9; }
+.coord-val     { color: #8899aa; font-size: 0.7rem; }
+.weather-row { cursor: pointer; }
+.weather-link {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  align-items: flex-end;
+  gap: 2px;
 }
-.fc-row {
+.weather-date-line { color: #d0dbe5; }
+.weather-location-line { color: #3b9fd9; font-size: 0.66rem; }
+.info-panel.light .weather-date-line { color: #0f172a; }
+.info-panel.light .weather-location-line { color: #2f855a; }
+
+.forecast-grid {
   display: flex;
+  flex-direction: row;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0 8px;
+  scrollbar-width: none;
+}
+.forecast-grid::-webkit-scrollbar { display: none; }
+
+.fc-item {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 7px;
-  background: rgba(255,255,255,0.03);
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  min-width: 76px;
+  flex: 1;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(200, 210, 220, 0.06);
 }
-.fc-header {
-  background: transparent;
-  padding: 2px 8px 4px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+.fc-item[onclick], .fc-item:has(.value) { cursor: pointer; }
+.fc-item:hover { background: rgba(47, 133, 90, 0.1); border-color: rgba(47, 133, 90, 0.2); }
+
+.fc-item--active {
+  background: rgba(47, 133, 90, 0.2) !important;
+  border-color: rgba(47, 133, 90, 0.4) !important;
 }
-.fc-header span {
-  font-size: 0.64rem;
-  color: #4A6A8A;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  font-family: 'JetBrains Mono', monospace;
-}
+
 .fc-label {
-  font-size: 0.72rem;
-  color: #6B8BAD;
+  font-size: 0.62rem;
+  color: #8899aa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
 }
-.observed-label { color: #8AACCC; font-weight: 600; }
+.observed-label { color: #3b9fd9; font-weight: 600; }
 .fc-na { opacity: 0.5; }
 .unit {
   font-style: normal;
@@ -986,18 +1144,18 @@ defineExpose({
 }
 .nodata-chip {
   font-size: 0.7rem;
-  color: #4A6A8A;
+  color: #8899aa;
   font-style: italic;
   font-family: 'JetBrains Mono', monospace;
 }
 .nodata-hint {
   font-size: 0.72rem;
-  color: #4A6A8A;
+  color: #8899aa;
   font-style: italic;
   margin: 4px 0 0;
   padding: 6px 10px;
-  background: rgba(0,0,0,0.18);
-  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
 }
 .model-tag {
   font-size: 0.62rem;
@@ -1009,7 +1167,7 @@ defineExpose({
 }
 .loading-hint {
   font-size: 0.7rem;
-  color: #4A6A8A;
+  color: #8ca6b8;
   text-align: center;
   margin: 8px 0 0;
   font-style: italic;
@@ -1019,12 +1177,12 @@ defineExpose({
   position: absolute;
   top: 10px;
   right: 10px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(170, 199, 216, 0.12);
   font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
-  color: #6B8BAD;
+  color: #8ca6b8;
   width: 26px;
   height: 26px;
   display: flex;
@@ -1033,11 +1191,11 @@ defineExpose({
   border-radius: 50%;
   transition: all 0.2s;
 }
-.close-btn:hover { background: rgba(0,212,168,0.15); color: #00D4A8; border-color: rgba(0,212,168,0.4); }
+.close-btn:hover { background: rgba(25, 199, 166, 0.12); color: #88f2db; border-color: rgba(25, 199, 166, 0.28); }
 
 .info-panel h3 {
   margin: 0 0 10px 0;
-  color: #00D4A8;
+  color: #effbff;
   font-size: 0.95rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1047,25 +1205,25 @@ defineExpose({
 
 .info-panel p {
   font-size: 0.76rem;
-  color: #6B8BAD;
+  color: #8ca6b8;
   margin: 0 0 10px;
   font-family: 'JetBrains Mono', monospace;
-  background: rgba(0,0,0,0.25) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 .value-section {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255,255,255,0.07);
+  border-top: 1px solid rgba(170, 199, 216, 0.1);
 }
 
 .value-section h4 {
   margin: 0 0 10px 0;
   font-size: 0.75rem;
   font-weight: 700;
-  color: #8AACCC;
+  color: #b9cfdd;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-family: 'JetBrains Mono', monospace;
@@ -1084,68 +1242,56 @@ defineExpose({
 /* ─── Location Button ───────────────────────────────────── */
 .location-btn {
   position: absolute;
-  bottom: 20px;
-  right: 160px;
+  bottom: 30px;
+  right: 20px;
   z-index: 1000;
   display: flex;
+  justify-content: center;
   align-items: center;
-  gap: 7px;
-  padding: 9px 16px;
-  border-radius: 50px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(4, 15, 36, 0.92);
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(170, 199, 216, 0.14);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(25, 199, 166, 0.18), transparent 58%),
+    rgba(9, 23, 34, 0.86);
   backdrop-filter: blur(14px);
-  color: #C8DFF0;
-  font-size: 0.82rem;
-  font-weight: 600;
+  color: #eaf6fc;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  box-shadow: 0 14px 34px rgba(1, 10, 17, 0.24);
   transition: all 0.2s ease;
 }
 .location-btn:hover {
-  border-color: rgba(0,212,168,0.5);
-  color: #00D4A8;
+  border-color: rgba(25, 199, 166, 0.38);
+  color: #88f2db;
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+  box-shadow: 0 18px 38px rgba(1, 10, 17, 0.26);
 }
 .location-btn.loading { opacity: 0.65; cursor: wait; }
 .location-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.location-btn:disabled:hover { transform: none; border-color: rgba(255,255,255,0.1); color: #C8DFF0; }
-.location-icon { font-size: 1rem; }
-
-/* ─── Chart Toggle Button ───────────────────────────────── */
-.chart-toggle-btn {
+.location-btn:disabled:hover { transform: none; border-color: rgba(170, 199, 216, 0.14); color: #eaf6fc; }
+.location-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+}
+.location-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.location-spinner {
   position: absolute;
-  bottom: 20px;
-  right: 16px;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 16px;
-  border-radius: 50px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(4, 15, 36, 0.92);
-  backdrop-filter: blur(14px);
-  color: #C8DFF0;
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
-  transition: all 0.2s ease;
+  inset: 10px;
+  border: 2px solid rgba(170, 199, 216, 0.14);
+  border-top-color: #19c7a6;
+  border-radius: 50%;
+  animation: locateSpin 0.85s linear infinite;
 }
-.chart-toggle-btn:hover {
-  border-color: rgba(0,212,168,0.5);
-  color: #00D4A8;
-  transform: translateY(-2px);
+
+@keyframes locateSpin {
+  to { transform: rotate(360deg); }
 }
-.chart-toggle-btn.active {
-  background: rgba(0,212,168,0.15);
-  border-color: rgba(0,212,168,0.5);
-  color: #00D4A8;
-  box-shadow: 0 0 20px rgba(0,212,168,0.2);
-}
-.chart-icon { font-size: 1rem; }
 
 /* ─── Chart Panel ───────────────────────────────────────── */
 .chart-panel {
@@ -1157,12 +1303,12 @@ defineExpose({
   height: min(72vh, 620px);
   min-width: 520px;
   min-height: 420px;
-  background: rgba(4, 12, 28, 0.97);
+  background: linear-gradient(180deg, rgba(10, 25, 36, 0.96), rgba(14, 32, 45, 0.94));
   backdrop-filter: blur(20px);
-  border: 1px solid rgba(0,212,168,0.2);
+  border: 1px solid rgba(170, 199, 216, 0.14);
   border-radius: 22px;
   z-index: 2000;
-  box-shadow: 0 24px 70px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,212,168,0.05);
+  box-shadow: 0 24px 70px rgba(1, 10, 17, 0.28), 0 0 0 1px rgba(170, 199, 216, 0.04);
   overflow: hidden;
   animation: fadeIn 0.22s ease;
 }
@@ -1178,22 +1324,161 @@ defineExpose({
   right: 14px;
 }
 
+/* ─── Weather Panel ───────────────────────────────────────── */
+.weather-panel {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  width: min(320px, 90vw);
+  max-height: 85vh;
+  background: linear-gradient(180deg, rgba(10, 25, 36, 0.96), rgba(14, 32, 45, 0.94));
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(170, 199, 216, 0.14);
+  border-radius: 20px;
+  z-index: 2000;
+  box-shadow: 0 24px 70px rgba(1, 10, 17, 0.28), 0 0 0 1px rgba(170, 199, 216, 0.04);
+  overflow-y: auto;
+  animation: slideInRight 0.28s ease;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(47, 133, 90, 0.3) transparent;
+}
+
+.weather-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.weather-panel::-webkit-scrollbar-thumb {
+  background: rgba(47, 133, 90, 0.2);
+  border-radius: 2px;
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateY(-50%) translateX(30px); }
+  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+}
+
+.weather-panel > .close-btn {
+  z-index: 2001;
+  top: 12px;
+  right: 12px;
+}
+
+.weather-content {
+  padding: 20px 18px;
+}
+
+.weather-title {
+  margin: 0 0 16px 0;
+  color: #effbff;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.weather-header {
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(170, 199, 216, 0.1);
+}
+
+.weather-location-info {
+  margin-bottom: 8px;
+}
+
+.location-name {
+  margin: 0;
+  color: #d0dbe5;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.location-coords {
+  margin: 2px 0 0 0;
+  color: #8899aa;
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.weather-date {
+  margin: 0;
+  color: #3b9fd9;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.weather-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.weather-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(200, 210, 220, 0.08);
+  transition: all 0.2s ease;
+}
+
+.weather-card:hover {
+  background: rgba(47, 133, 90, 0.12);
+  border-color: rgba(47, 133, 90, 0.2);
+}
+
+.weather-icon {
+  font-size: 1.6rem;
+}
+
+.weather-label {
+  font-size: 0.65rem;
+  color: #8899aa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: 'JetBrains Mono', monospace;
+  text-align: center;
+}
+
+.weather-value {
+  font-size: 0.9rem;
+  color: #3b9fd9;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.no-weather-data {
+  text-align: center;
+  color: #8899aa;
+  font-style: italic;
+  font-size: 0.75rem;
+  margin: 12px 0 0 0;
+}
+
 .leaflet-tile { image-rendering: auto; }
 
 /* ─── Blue Dot Marker ───────────────────────────────────── */
 :global(.blue-dot-marker) { position: relative; }
 :global(.blue-dot) {
   width: 16px; height: 16px;
-  background: #00D4A8;
+  background: #19c7a6;
   border: 3px solid white;
   border-radius: 50%;
   position: absolute; top: 4px; left: 4px;
   z-index: 2;
-  box-shadow: 0 0 12px rgba(0,212,168,0.6);
+  box-shadow: 0 0 12px rgba(25, 199, 166, 0.45);
 }
 :global(.pulse-ring) {
   width: 32px; height: 32px;
-  background: rgba(0,212,168,0.25);
+  background: rgba(25, 199, 166, 0.22);
   border-radius: 50%;
   position: absolute; top: -4px; left: -4px;
   animation: markerPulse 1.5s ease-out infinite;
@@ -1208,19 +1493,20 @@ defineExpose({
 /* ─── Responsive ────────────────────────────────────────── */
 @media (max-width: 768px) {
   .map-style-dropdown { top: 10px; right: 10px; width: 155px; }
-  .info-panel { left: 10px; bottom: 10px; max-width: calc(100% - 20px); }
-  .location-btn { right: 136px; bottom: 14px; padding: 8px 14px; }
-  .chart-toggle-btn { right: 10px; bottom: 14px; padding: 8px 14px; }
+  .info-panel { left: 10px; right: 10px; bottom: 10px; width: auto; max-width: none; max-height: 42vh; }
+  .location-btn { right: 78px; bottom: 14px; width: 48px; height: 48px; }
   .chart-panel { min-width: 90vw; width: 92vw; min-height: 55vh; }
+  .weather-panel { right: 10px; width: calc(100% - 20px); max-width: 340px; }
 }
 
 @media (max-width: 480px) {
-  .location-btn { right: 66px; padding: 9px; border-radius: 50%; }
-  .location-text { display: none; }
-  .chart-toggle-btn { right: 10px; padding: 9px; border-radius: 50%; }
-  .chart-text { display: none; }
-  .chart-icon, .location-icon { font-size: 1.2rem; margin: 0; }
+  .map-style-dropdown { width: 146px; }
+  .dropdown-toggle { padding: 8px 12px; }
+  .info-panel { padding: 14px 14px 12px; border-radius: 18px; }
+  .location-btn { right: 66px; width: 46px; height: 46px; border-radius: 14px; }
   .chart-panel { min-width: 94vw; width: 94vw; top: 48%; }
+  .weather-panel { right: 8px; width: calc(100% - 16px); max-width: 290px; }
+  .weather-grid { grid-template-columns: 1fr; }
 }
 /* ─── Kc Forecast Window Bar ────────────────────────────────────────── */
 .forecast-window-bar {
@@ -1232,23 +1518,23 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 6px 10px;
-  border-radius: 50px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(4, 15, 36, 0.92);
+  border-radius: 999px;
+  border: 1px solid rgba(200, 210, 220, 0.1);
+  background: rgba(5, 8, 14, 0.92);
   backdrop-filter: blur(14px);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
   animation: dropdownFadeIn 0.18s ease;
 }
 
 .fw-label {
   font-size: 0.68rem;
   font-weight: 700;
-  color: #4A6A8A;
+  color: #8899aa;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-family: 'JetBrains Mono', monospace;
   padding-right: 6px;
-  border-right: 1px solid rgba(255,255,255,0.08);
+  border-right: 1px solid rgba(255,255,255,0.06);
   margin-right: 4px;
 }
 
@@ -1257,7 +1543,7 @@ defineExpose({
   border-radius: 50px;
   border: 1px solid transparent;
   background: transparent;
-  color: #6B8BAD;
+  color: #8899aa;
   font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
@@ -1266,18 +1552,18 @@ defineExpose({
   white-space: nowrap;
 }
 .fw-btn:hover {
-  background: rgba(255,255,255,0.06);
-  color: #C8DFF0;
+  background: rgba(47, 133, 90, 0.15);
+  color: #d0dbe5;
 }
 .fw-btn.active {
-  background: rgba(0,212,168,0.18);
-  border-color: rgba(0,212,168,0.5);
-  color: #00D4A8;
-  box-shadow: 0 0 10px rgba(0,212,168,0.15);
+  background: rgba(47, 133, 90, 0.25);
+  border-color: rgba(47, 133, 90, 0.5);
+  color: #3b9fd9;
+  box-shadow: 0 0 10px rgba(47, 133, 90, 0.2);
 }
 
 .fc-label--active {
-  color: #00D4A8 !important;
+  color: #3b9fd9 !important;
   font-weight: 700;
 }
 
@@ -1298,4 +1584,117 @@ defineExpose({
   .fw-btn { padding: 4px 7px; font-size: 0.65rem; }
 }
 
+/* ─── Custom Value Popup ────────────────────────────────── */ 
+:global(.custom-value-popup .leaflet-popup-content-wrapper) { 
+  background: rgba(239, 242, 245, 0.9) !important; 
+  backdrop-filter: blur(14px) saturate(180%); 
+  border: 1px solid rgba(0, 0, 0, 0.35); 
+  border-radius: 12px; 
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4); 
+  padding: 10; 
+} 
+
+:global(.custom-value-popup .leaflet-popup-content) { 
+  margin: 5 !important; 
+  min-width: 190px !important;
+} 
+
+:global(.custom-value-popup .leaflet-popup-tip) { 
+  background: rgba(13, 25, 48, 0.88) !important; 
+  border-left: 1px solid rgba(0, 212, 168, 0.2); 
+  border-bottom: 1px solid rgba(0, 212, 168, 0.2); 
+} 
+
+.popup-content-multi {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.popup-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.popup-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+:global(.custom-value-popup.light .leaflet-popup-content-wrapper) {
+  background: rgba(255, 255, 255, 0.94) !important;
+  border-color: rgba(13, 148, 136, 0.25);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+:global(.custom-value-popup.light .leaflet-popup-tip) {
+  background: rgba(255, 255, 255, 0.94) !important;
+}
+
+:global(.custom-value-popup.light .value-layer) {
+  color: #475569 !important;
+  font-weight: 600;
+}
+
+:global(.custom-value-popup.light .value-num) {
+  color: #0d9488 !important;
+  font-weight: 700;
+}
+
+:global(.custom-value-popup.light .value-unit) {
+  color: #64748b !important;
+}
+
+:global(.custom-value-popup.light .popup-row) {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+:global(.custom-value-popup.light .popup-loading) {
+  color: #475569;
+}
+
+.popup-loading { 
+  padding: 14px 20px; 
+  color: #C8DFF0; 
+  font-family: 'JetBrains Mono', monospace; 
+  font-size: 0.85rem; 
+  display: flex; 
+  align-items: center; 
+  gap: 10px; 
+} 
+
+.value-layer { 
+  color: #C8DFF0; 
+  font-size: 0.8rem;
+  font-weight: 500; 
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+} 
+
+.value-num { 
+  color: #00D4A8; 
+  font-weight: 700; 
+  font-size: 1rem;
+  font-family: 'JetBrains Mono', monospace; 
+  margin-left: auto;
+} 
+
+.value-unit { 
+  font-size: 0.72rem; 
+  color: #8AACCC; 
+  font-weight: 500; 
+} 
+
+.no-data { 
+  padding: 14px 20px;
+  color: #8AACCC; 
+  font-style: italic; 
+  font-weight: 400; 
+  font-size: 0.85rem;
+} 
 </style>

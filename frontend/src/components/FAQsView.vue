@@ -2,13 +2,10 @@
   <div class="wiki-root" :class="{ dark: isDark }">
     <div class="wiki-topbar">
       <div class="topbar-inner">
-        <div class="brand" @click="$emit('launch')">
+        <div class="brand" @click="$emit('home')">
+          <button @click="$emit('home')" class="home-btn">🏠 Home</button>
           <span class="icon">🌾</span> <span class="brand-text">Irrigation crop Water Requirement</span>
-        </div>
-        <div class="controls">
-           <button class="btn-theme" @click="isDark = !isDark">{{ isDark ? '☀️ Light' : '🌙 Dark' }}</button>
-           <button class="btn-launch" @click="$emit('launch')">Launch Dashboard</button>
-           <button @click="showHome" class="home-btn">⌂ Home</button>
+          
         </div>
       </div>
     </div>
@@ -160,13 +157,13 @@
 <script setup>
 import { ref } from 'vue'
 
-defineEmits(['launch'])
+const emit = defineEmits(['launch', 'home'])
 const currentView = ref('home')
 // Maintain state for the background theme. Start in light mode for the Wiki theme by default.
 const isDark = ref(false)
 
 function showHome() {
-  currentView.value = 'home'
+  emit('home')
 }
 </script>
 
