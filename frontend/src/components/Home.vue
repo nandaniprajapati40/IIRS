@@ -419,6 +419,8 @@ function sendSuggestion(q) {
   color: var(--text-primary);
   transition: background 0.4s ease, color 0.4s ease;
   overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 100vh;
 }
 
 /* ── LIGHT THEME OVERRIDES ── */

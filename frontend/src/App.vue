@@ -687,10 +687,10 @@ watch(calendarOpen, async (open) => {
 
 // Layer definitions
 const layerDefs = [
-  { key:'savi', name:'Soil Adjusted Vegetation Index', maxLabel:'1.0', midLabel:'0.0', minLabel:'-1.0', icon:'🌿' },
-  { key:'kc', name:'Crop Coefficient (FAO-56)', maxLabel:'1.15', midLabel:'0.7', minLabel:'0.30', icon:'💧' },
-  { key:'cwr', name:'Crop Water Requirement (mm)', maxLabel:'10 mm', midLabel:'5 mm', minLabel:'0 mm', icon:'💦' },
-  { key:'iwr', name:'Irrigation Water Requirement (mm)', maxLabel:'10 mm', midLabel:'5 mm', minLabel:'0 mm', icon:'🚿' },
+  { key:'savi', name:'Soil Adjusted Vegetation Index', maxLabel:'1.0', midLabel:'0.0', minLabel:'-1.0' },
+  { key:'kc', name:'Crop Coefficient (FAO-56)', maxLabel:'1.15', midLabel:'0.7', minLabel:'0.30' },
+  { key:'cwr', name:'Crop Water Requirement (mm)', maxLabel:'10 mm', midLabel:'5 mm', minLabel:'0 mm' },
+  { key:'iwr', name:'Irrigation Water Requirement (mm)', maxLabel:'10 mm', midLabel:'5 mm', minLabel:'0 mm'},
 ]
 
 const legendBreakpoints = { savi: [-1,-0.8,-0.6,-0.4,-0.2,0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1], kc: [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1,1.1,1.2,1.3,1.4,1.5], cwr: [0,1,2,3,4,4.5,5,5.5,6,6.5,7,7.5,8,8.5,9,9.5,10], iwr: [0,1,2,3,4,5,6,7,8,9,10] }

@@ -86,7 +86,7 @@
           <h3>ETc & Crop Coefficients</h3>
           <div class="wiki-thumb right" style="width: 300px;">
             <div class="thumb-inner">
-              <img src="/assets/kc.jpeg" alt="Crop Coefficient curve" />
+              <img src="../../dist/assets/kc.jpg"/>
               <div class="thumbcaption">
                 Standard basal crop coefficient (Kc) evolution representing stages of a crop lifecycle.
               </div>
@@ -186,6 +186,8 @@ function showHome() {
   background: var(--bg-site);
   color: var(--text-main);
   min-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 80px;
   transition: background 0.3s, color 0.3s;
 }
@@ -273,7 +275,7 @@ html {
   border-radius: 2px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.04);
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 .wiki-root.dark .wiki-content { box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
 
