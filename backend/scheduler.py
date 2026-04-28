@@ -5,6 +5,7 @@ scheduler.py — Sequential dynamic nightly pipeline
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import traceback
@@ -39,6 +40,26 @@ def _count_local_sentinel_files() -> int:
     return len(list(DIRECTORIES["raw"]["sentinel2"].glob("S2_*.tif")))
 
 
+def _ensure_thread_event_loop() -> None:
+    """
+    APScheduler worker threads inherit the main uvicorn asyncio event loop
+    reference via asyncio.get_event_loop(). Playwright's sync API calls
+    loop.is_running() and crashes if it finds a running loop.
+
+    This helper assigns a fresh idle event loop to the current thread,
+    so any Playwright code executed in this thread sees no running loop.
+    Must be called at the top of every stage function that (directly or
+    indirectly) uses Playwright sync API.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.set_event_loop(asyncio.new_event_loop())
+    except RuntimeError:
+        # No current event loop at all — create one
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 # ── Stage 1: Sentinel check + direct download ──────────────────────────────
 
 def _stage1_sentinel_sync(
@@ -67,8 +88,6 @@ def _stage1_sentinel_sync(
 
         new_tifs = []
         for date_str in result.get('downloaded', []):
-            # date_str format: YYYY-MM-DD (as returned by downloader)
-            # Convert to S2_YYYYMMDD.tif
             ymd = date_str.replace('-', '')
             tif = DIRECTORIES["raw"]["sentinel2"] / f"S2_{ymd}.tif"
             if tif.exists():
@@ -99,20 +118,28 @@ def _stage2_mosdac_order() -> Optional[List[str]]:
     Use MosdacAgent to place orders for any missing MOSDAC data.
     No download happens here; only order placement.
     Returns order_keys list if successful, None on failure.
+
+    IMPORTANT: _ensure_thread_event_loop() MUST be called first.
+    APScheduler worker threads inherit uvicorn's running asyncio loop.
+    Playwright's sync API detects this and raises:
+      "It looks like you are using Playwright Sync API inside the asyncio loop."
+    Assigning a fresh idle loop to this thread prevents that crash and allows
+    unlimited nightly re-runs.
     """
+    _ensure_thread_event_loop()
+
     logger.info("▶ Stage 2 — MOSDAC order placement")
     try:
         from mosdac_agent import MosdacAgent
         agent = MosdacAgent(headless=True)
-        
-        # Try to place orders and get order keys
+
         order_keys = agent.place_orders_and_return_keys()
-        
+
         if order_keys:
             logger.info(f"  Stage 2 ✓ — orders placed: {order_keys}")
         else:
             logger.info("  Stage 2 ✓ — no orders needed or placed")
-        
+
         return order_keys
     except Exception as e:
         logger.error(f"  Stage 2 FAILED: {e}", exc_info=True)
@@ -124,25 +151,25 @@ def _stage2_mosdac_order() -> Optional[List[str]]:
 def _stage3_mosdac_download(order_keys: List[str] = None) -> bool:
     """
     Use MosdacDownloader to fetch files from the latest order.
-    
+
     Args:
         order_keys: List of order folder names from Stage 2
-    
+
     Returns True if successful (or no data to download), False on failure.
     """
     logger.info("▶ Stage 3 — MOSDAC download")
-    
+
     if not order_keys:
         logger.warning("  Stage 3 — No order_keys provided, skipping download")
         return True  # Non-fatal: continue pipeline
-    
+
     try:
         from mosdac_downloader import MosdacDownloader
         downloader = MosdacDownloader()
-        
+
         stats = downloader.download_from_orders(order_keys)
-        
-        pet_ok  = stats.get("pet", {}).get("downloaded", 0)
+
+        pet_ok  = stats.get("pet",  {}).get("downloaded", 0)
         rain_ok = stats.get("rain", {}).get("downloaded", 0)
         logger.info(f"  Stage 3 ✓ — PET downloaded={pet_ok}, RAIN downloaded={rain_ok}")
         return True
@@ -250,28 +277,28 @@ def run_nightly_pipeline(
     logger.info("═" * 65)
 
     stage_results = {}
-    order_keys = None  # Store order keys from Stage 2
+    order_keys = None
 
     try:
         # Stage 1
         new_files = _stage1_sentinel_sync(single_image_callback)
         stage_results["stage1"] = bool(new_files)
 
-        # Stage 2 - Get order keys
+        # Stage 2 — asyncio loop isolation is handled inside _stage2_mosdac_order
         order_keys = _stage2_mosdac_order()
         stage_results["stage2"] = order_keys is not None
 
-        # Stage 3 (download) - Pass order_keys
+        # Stage 3
         s3_ok = _stage3_mosdac_download(order_keys)
         stage_results["stage3"] = s3_ok
 
-        # Stage 4 (processing)
+        # Stage 4
         s4_ok = _stage4_process()
         stage_results["stage4"] = s4_ok
         if s4_ok:
             _invalidate_forecast_cache()
 
-        # Stage 5 (GeoServer)
+        # Stage 5
         s5_ok = _stage5_geoserver(generate_callback)
         stage_results["stage5"] = s5_ok
 
@@ -335,7 +362,7 @@ class NewSentinelHandler(FileSystemEventHandler):
             if self.single_image_callback:
                 self.single_image_callback(path)
             else:
-                _stage4_process()   # processing only
+                _stage4_process()
 
             _invalidate_forecast_cache()
             _stage5_geoserver(self.generate_callback)
@@ -385,16 +412,16 @@ def start_scheduler(
 
     # 00:00 nightly — full sequential pipeline
     scheduler.add_job(
-        func             = run_nightly_pipeline,
-        trigger          = "cron",
-        hour             = 11,
-        minute           = 2,
-        kwargs           = {
-            "generate_callback":      generate_callback,
-            "single_image_callback":  single_image_pipeline_callback,
+        func               = run_nightly_pipeline,
+        trigger            = "cron",
+        hour               = 11,
+        minute             = 16,
+        kwargs             = {
+            "generate_callback":     generate_callback,
+            "single_image_callback": single_image_pipeline_callback,
         },
-        id               = "nightly_pipeline",
-        replace_existing = True,
+        id                 = "nightly_pipeline",
+        replace_existing   = True,
         misfire_grace_time = 3600,
     )
 
@@ -433,5 +460,3 @@ def start_scheduler(
     logger.info(f"Watchdog active — watching: {sentinel_dir}")
 
     return scheduler, observer
-
-

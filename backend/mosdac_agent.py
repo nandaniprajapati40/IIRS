@@ -6,6 +6,7 @@ mosdac_agent.py  ─  MOSDAC PET + Rainfall automated downloader
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -118,8 +119,8 @@ class Product:
         Find this product's file on disk.
         Checks canonical .h5 first, then globs for legacy .hdf / .tif.
         """
-        name     = Product.filename(date, product)
-        stamp    = date.strftime("%d%b%Y").upper()
+        name      = Product.filename(date, product)
+        stamp     = date.strftime("%d%b%Y").upper()
         code_frag = "L3C_PET_DLY" if product == Product.PET else "L3G_IMR_DLY"
         glob_pat  = f"3RIMG_{stamp}_0015_{code_frag}*"
 
@@ -634,18 +635,16 @@ class MosdacBrowser:
     # ── Rain format/coverage selectors (non-blocking) ─────────────────────────
 
     def _select_rain_hdf_format(self) -> bool:
-        """
-        Select HDF format for Rainfall (preferred).
-        """
+        """Select HDF format for Rainfall (preferred)."""
         selectors = [
-            ("md-radio-button[value='HDF']", "md_radio_hdf"),
-            ("input[type='radio'][value='HDF']", "input_radio_hdf"),
-            ("input[value='HDF']", "input_hdf_direct"),
-            ("label:has-text('HDF')", "label_hdf"),
-            ("button:has-text('HDF')", "button_hdf"),
-            ("[role='radio'][aria-label*='HDF']", "role_radio_hdf"),
-            ("md-radio-button:first-of-type", "md_radio_first"),  # fallback (usually HDF)
-            ("input[type='radio']:first-of-type", "input_radio_first"),
+            ("md-radio-button[value='HDF']",          "md_radio_hdf"),
+            ("input[type='radio'][value='HDF']",       "input_radio_hdf"),
+            ("input[value='HDF']",                     "input_hdf_direct"),
+            ("label:has-text('HDF')",                  "label_hdf"),
+            ("button:has-text('HDF')",                 "button_hdf"),
+            ("[role='radio'][aria-label*='HDF']",       "role_radio_hdf"),
+            ("md-radio-button:first-of-type",           "md_radio_first"),
+            ("input[type='radio']:first-of-type",       "input_radio_first"),
         ]
 
         for selector, desc in selectors:
@@ -674,14 +673,12 @@ class MosdacBrowser:
         return True
 
     def _select_rain_products_only(self) -> bool:
-        """
-        Select 'Products Only' in Media section.
-        """
+        """Select 'Products Only' in Media section."""
         selectors = [
-            ("md-radio-button:has-text('Products Only')", "md_radio_products_only"),
-            ("label:has-text('Products Only')", "label_products_only"),
-            ("input[value='Products Only']", "input_products_only"),
-            ("input[type='radio']:first-of-type", "input_radio_first"),  # fallback
+            ("md-radio-button:has-text('Products Only')",                    "md_radio_products_only"),
+            ("label:has-text('Products Only')",                              "label_products_only"),
+            ("input[value='Products Only']",                                 "input_products_only"),
+            ("input[type='radio']:first-of-type",                            "input_radio_first"),
             ("md-radio-group:nth-of-type(2) md-radio-button:first-of-type", "md_group_first"),
         ]
 
@@ -736,9 +733,8 @@ class MosdacBrowser:
                 )
                 return fallback
 
-            time.sleep(3)   # wait for modal
+            time.sleep(3)
 
-            # Read modal text
             modal_text = ""
             for modal_sel in [
                 "[class*='modal-body']", "[class*='modal-content']",
@@ -810,11 +806,9 @@ class MosdacBrowser:
             f"{start_date.strftime('%Y-%m-%d')} → {end_date.strftime('%Y-%m-%d')}"
         )
 
-        # Step 1: Navigate to catalog
         if not self._navigate_to_catalog():
             return False
 
-        # Step 2: Click cart icon
         if not self._click_catalog_cart(serial, code):
             self.dump_page_structure(f"order_no_cart_{product}")
             logger.error(
@@ -823,10 +817,8 @@ class MosdacBrowser:
             )
             return False
 
-        # Step 3: Wait for modal
         time.sleep(3)
 
-        # Step 4a: Fill Start Date (DD-MM-YYYY)
         if not self._fill([
             "input[placeholder*='Start']", "input[placeholder*='start']",
             "input[id*='start']",          "input[name*='start']",
@@ -836,7 +828,6 @@ class MosdacBrowser:
             self._dbg(f"order_no_startdate_{product}")
             logger.warning("  Start Date field not found — continuing anyway")
 
-        # Step 4b: Fill End Date (DD-MM-YYYY)
         if not self._fill([
             "input[placeholder*='End']", "input[placeholder*='end']",
             "input[id*='end']",          "input[name*='end']",
@@ -848,7 +839,6 @@ class MosdacBrowser:
 
         logger.info(f"  Dates filled: {start_str} → {end_str}")
 
-        # Step 4c: Product-specific form options (both non-blocking)
         if product == Product.RAIN:
             time.sleep(2)
             self._select_rain_hdf_format()
@@ -860,7 +850,6 @@ class MosdacBrowser:
 
         time.sleep(1)
 
-        # Step 5: Add to cart
         if not self._click([
             "button:has-text('Add to cart')",
             "button:has-text('Add to Cart')",
@@ -876,7 +865,6 @@ class MosdacBrowser:
         logger.info("  ✓ 'Add to cart' clicked")
         time.sleep(4)
 
-        # Step 6: Navigate to cart, agree T&C, place order
         self._goto(MOSDAC_UOPS_URL + "#/MyOrder", wait=4)
 
         agreed = self._click([
@@ -907,7 +895,6 @@ class MosdacBrowser:
         logger.info("  ✓ 'Click here to Place Order' clicked")
         time.sleep(4)
 
-        # Confirm any popup dialog
         for sel in [
             "button:has-text('Yes')", "button:has-text('Confirm')",
             "button:has-text('OK')",  "[class*='confirm']",
@@ -921,7 +908,6 @@ class MosdacBrowser:
             except Exception:
                 continue
 
-        # Step 7: Verify order appeared in status table
         self._goto(MOSDAC_UOPS_URL + "#/MyOrder", wait=3)
         page_text = self._page.content().upper()
         confirmed = any(tok in page_text for tok in [
@@ -940,138 +926,12 @@ class MosdacBrowser:
             )
         return True  # optimistic
 
-
-    def place_orders_and_return_keys(self) -> Optional[List[str]]:
-        """
-        Place orders for missing data and return order keys.
-        
-        This is used by scheduler.py Phase 1.
-        
-        Returns:
-            List of order folder names, or None if no orders placed/failed
-        """
-        today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-        if today.month not in RABI_MONTHS:
-            logger.info("Outside Rabi season – no orders placed")
-            return None
-        
-        # Discover latest available date per product
-        logger.info("Discovering latest available MOSDAC dates …")
-        latest_available = {}
-        
-        if self._ensure_logged_in():
-            for product in (Product.PET, Product.RAIN):
-                latest_available[product] = self._browser.discover_latest_available_date(product)
-        else:
-            for product in (Product.PET, Product.RAIN):
-                latest_available[product] = today - timedelta(days=MOSDAC_DATA_LAG_DAYS)
-        
-        # Check which dates are missing
-        missing = {Product.PET: [], Product.RAIN: []}
-        order_keys = []
-        
-        for product in (Product.PET, Product.RAIN):
-            date = latest_available[product]
-            if not Product.is_downloaded(date, product):
-                found = Product.find_on_disk(date, product)
-                if found:
-                    Product.mark_downloaded(date, str(found), product)
-                else:
-                    missing[product].append(date)
-        
-        if not any(missing.values()):
-            logger.info("No missing MOSDAC data – no orders needed")
-            return None
-        
-        # Place orders
-        try:
-            if not self._ensure_logged_in():
-                raise RuntimeError("Cannot log in to MOSDAC")
-            
-            for product in (Product.PET, Product.RAIN):
-                dates = missing[product]
-                if not dates:
-                    continue
-                # For simplicity, order each missing date individually
-                for d in dates:
-                    if self._browser.place_order(product, d, d):
-                        logger.info(f"Order placed for {product} on {d.date()}")
-                        # Store order keys (we need to get them from the browser)
-                        # This is a simplification - you might need to parse the order ID
-                        order_keys.append(f"{product.upper()}_ORDER_{d.strftime('%Y%m%d')}")
-                    else:
-                        logger.error(f"Order placement failed for {product} on {d.date()}")
-            
-            return order_keys if order_keys else None
-            
-        except Exception as e:
-            logger.error(f"Order placement failed: {e}", exc_info=True)
-            return None
-
-    def place_orders_for_new_data(self) -> bool:
-        """
-        Discover missing dates and place UOPS orders for them.
-        Does NOT download anything.
-        Returns True if orders were placed successfully (or none needed),
-        False on failure.
-        """
-        today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-        if today.month not in RABI_MONTHS:
-            logger.info("Outside Rabi season – no orders placed")
-            return True
-
-        # Discover latest available date per product
-        logger.info("Discovering latest available MOSDAC dates …")
-        latest_available = {}
-        if self._ensure_logged_in():
-            for product in (Product.PET, Product.RAIN):
-                latest_available[product] = self._browser.discover_latest_available_date(product)
-        else:
-            for product in (Product.PET, Product.RAIN):
-                latest_available[product] = today - timedelta(days=MOSDAC_DATA_LAG_DAYS)
-
-        # Check which dates are missing
-        missing = {Product.PET: [], Product.RAIN: []}
-        for product in (Product.PET, Product.RAIN):
-            date = latest_available[product]
-            if not Product.is_downloaded(date, product):
-                found = Product.find_on_disk(date, product)
-                if found:
-                    Product.mark_downloaded(date, str(found), product)
-                else:
-                    missing[product].append(date)
-
-        if not any(missing.values()):
-            logger.info("No missing MOSDAC data – no orders needed")
-            return True
-
-        # Place orders
-        try:
-            if not self._ensure_logged_in():
-                raise RuntimeError("Cannot log in to MOSDAC")
-
-            for product in (Product.PET, Product.RAIN):
-                dates = missing[product]
-                if not dates:
-                    continue
-                # For simplicity, order each missing date individually
-                for d in dates:
-                    if not self._browser.place_order(product, d, d):
-                        logger.error(f"Order placement failed for {product} on {d.date()}")
-                        continue
-                    logger.info(f"Order placed for {product} on {d.date()}")
-            return True
-        except Exception as e:
-            logger.error(f"Order placement failed: {e}", exc_info=True)
-            return False
-
     # ── Read row status (used by agent + Scheduler's OrderPoller) ─────────────
 
     def _read_row_status(self, code: str, date_tok: str) -> Optional[str]:
         """
         Read the status keyword from the order row matching `code` or `date_tok`.
         Returns a normalised uppercase status string, or None if not found.
-        Called both from wait_for_order_ready() and from Scheduler's OrderPoller.
         """
         try:
             row = None
@@ -1100,7 +960,6 @@ class MosdacBrowser:
         """
         Poll MyOrder page until the order is READY or fails.
         Used only in standalone CLI mode (download_dates).
-        When called from scheduler.py, the Scheduler's OrderPoller handles polling instead.
         """
         start_str = start_date.strftime("%Y-%m-%d")
         date_tok  = start_date.strftime("%d%b%Y").upper()
@@ -1153,7 +1012,6 @@ class MosdacBrowser:
 
     # ── Download files ────────────────────────────────────────────────────────
 
-    
     def _do_download(
         self,
         date:     datetime,
@@ -1222,7 +1080,24 @@ class MosdacAgent:
         logger.info("MosdacAgent initialised (Playwright, no API key needed).")
 
     def _ensure_logged_in(self) -> bool:
-        """Start browser and log in if not already done. Called by Phase 1."""
+        """
+        Start browser and log in if not already done.
+
+        ASYNCIO GUARD: Playwright's sync API calls asyncio.get_event_loop()
+        internally and raises an error if a loop is already running (e.g.
+        uvicorn's loop, which APScheduler worker threads can inherit).
+        We assign a fresh idle event loop to the current thread so Playwright
+        always sees is_running() == False — regardless of how many times the
+        scheduler fires this method.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.set_event_loop(asyncio.new_event_loop())
+                logger.debug("_ensure_logged_in: replaced running loop with fresh idle loop")
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
         if not self._started:
             self._browser.start()
             self._started = True
@@ -1231,7 +1106,7 @@ class MosdacAgent:
         return self._logged_in
 
     def _stop(self):
-        """Close browser. Called by Scheduler after Phase 2, or by CLI after download."""
+        """Close browser."""
         if self._started:
             self._browser.stop()
             self._started = self._logged_in = False
@@ -1344,10 +1219,9 @@ class MosdacAgent:
         the delivered files over SFTP using mosdac_downloader's pipeline.
 
         Flow per date:
-          1. Browser: place order (navigate catalog → fill dates → HDF → Add to cart → confirm)
-          2. Browser: poll MyOrder page until status = AVAILABLE
+          1. Browser: place order
+          2. Browser: poll MyOrder until status = AVAILABLE
           3. SFTP: _discover_orders() → download_pet / download_rainfall
-             (no browser download — MOSDAC delivers to SFTP, not HTTP)
         """
         results = {"pet": 0, "rain": 0}
 
@@ -1360,7 +1234,6 @@ class MosdacAgent:
                 continue
 
             for date in dates:
-                # ── Step 1 & 2: place order via browser, wait for AVAILABLE ──
                 if not self._browser.place_order(product, date, date):
                     logger.error(f"Failed to place order for {product.upper()} on {date.date()}")
                     continue
@@ -1373,7 +1246,6 @@ class MosdacAgent:
 
                 logger.info(f"Order ready for {product.upper()} on {date.date()}")
 
-                # ── Step 3: SFTP download ─────────────────────────────────────
                 if not SFTP_PIPELINE_AVAILABLE:
                     logger.error(
                         "mosdac_downloader not available — cannot SFTP-download. "
@@ -1409,9 +1281,7 @@ class MosdacAgent:
                 except Exception as exc:
                     logger.error(f"SFTP error for {product.upper()} {date.date()}: {exc}")
 
-        return results
-        
-        return results
+        return results   # ← single return, duplicate removed
 
     def download_new_only(self) -> Dict:
         """
@@ -1424,7 +1294,6 @@ class MosdacAgent:
             logger.info(f"Outside Rabi season ({today.strftime('%b')}) — skipped")
             return {p: {"downloaded": 0, "failed": 0} for p in (Product.PET, Product.RAIN)}
 
-        # Step 1: Discover latest available date per product
         logger.info("Discovering latest available MOSDAC dates …")
         latest_available: Dict[str, datetime] = {}
 
@@ -1447,7 +1316,6 @@ class MosdacAgent:
             tag = "PET " if product == Product.PET else "RAIN"
             logger.info(f"  [{tag}] Latest available date: {ld.date()}")
 
-        # Step 2: Check only the latest discovered date
         missing: Dict[str, List[datetime]] = {Product.PET: [], Product.RAIN: []}
         for product in (Product.PET, Product.RAIN):
             end = latest_available[product]
@@ -1476,7 +1344,6 @@ class MosdacAgent:
                     + ", ".join(d.strftime("%Y-%m-%d") for d in dates)
                 )
 
-        # Step 3: Order + download (CLI mode — agent handles full cycle)
         saved = self.download_dates(missing)
 
         result = {}

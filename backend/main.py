@@ -1,4 +1,3 @@
-
 import logging
 import re
 from datetime import datetime, timedelta
@@ -23,16 +22,21 @@ from config import (
 )
 from logging_config import setup_logging
 import models
-from models import build_forecast_exog   # shared exog builder for SARIMAX out-of-sample
+from models import (
+    build_forecast_exog,   # shared exog builder for SARIMAX out-of-sample
+    raster_mean,           # spatial mean utility (fixes broken import in _climatological_peff)
+    savi_to_kc,            # physics: Kc = KC_SLOPE × SAVI + KC_INTERCEPT
+    KC_SLOPE,
+    KC_INTERCEPT,
+    KC_MIN,
+    KC_MAX,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Physical constants from thesis
-KC_SLOPE     = WHEAT_PARAMS["savi_kc"]["slope"]          # 1.2088
-KC_INTERCEPT = WHEAT_PARAMS["savi_kc"]["intercept"]       # 0.5375
-KC_MIN       = 0.30
-KC_MAX       = 1.15
+# Physical constants sourced from models.py (thesis linear regression)
+# KC_SLOPE, KC_INTERCEPT, KC_MIN, KC_MAX imported above from models
 CWR_MIN      = 0.0
 CWR_MAX      = 15.0
 
@@ -83,7 +87,9 @@ _fc_cache: Dict = {"pet_count": -1}
 
 
 def _get_model(model_type: str):
-    """Load and cache trained SARIMAx models (PET and Kc)."""
+    """Load and cache trained SARIMAx models.
+    Supported types: 'pet', 'kc', 'savi'
+    """
     global _MODEL_CACHE
 
     if model_type in _MODEL_CACHE:
@@ -413,114 +419,183 @@ def generate_history_rasters() -> int:
 # Only PET uses SARIMAX. Kc uses its own trained SARIMAx + DOY adjustment.
 
 # ═══════════════════════════════════════════════════════════════════════════
-def _project_kc_for_dates(future_dates: pd.DatetimeIndex) -> np.ndarray:
-    """Kc forecast with SARIMAX + stronger deterministic trend + seasonal variation."""
-    kc_model, kc_meta = _get_model("kc")
+def _project_kc_for_dates(
+    future_dates: pd.DatetimeIndex,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Forecast SAVI with SARIMAX, then derive Kc via thesis physics.
 
-    last_kc_obs = _read_mean(history_path("kc", "today")) or 0.80
-    kc_1d_ago   = _read_mean(history_path("kc", "1")) or last_kc_obs
-    kc_3d_ago   = _read_mean(history_path("kc", "3")) or kc_1d_ago
+    Returns (savi_forecast, kc_forecast).
+
+    IMPROVEMENT over previous version:
+    ─────────────────────────────────
+    Previously: trained SARIMAX directly on Kc (a derived variable) → R²=0.11,
+    then used only 15% of that output anyway.
+
+    Now (primary path):
+        1. Forecast SAVI with SARIMAX  (raw satellite signal, cleaner signal)
+        2. Apply  Kc = KC_SLOPE × SAVI + KC_INTERCEPT  (thesis linear eq.)
+        3. Apply phenological decline at maturation only when obs slope
+           confirms it (no blind overrides).
+        4. Smooth the 1→15 day transition from last observation.
+
+    Fallback (if SAVI model unavailable):
+        Same trend-based Kc method as before, but with 60% SARIMAX weight
+        instead of the previous 15%.
+    """
+    last_kc_obs   = _read_mean(history_path("kc",   "today")) or 0.80
+    last_savi_obs = _read_mean(history_path("savi", "today")) or (
+        (last_kc_obs - KC_INTERCEPT) / KC_SLOPE
+    )
+    savi_1d_ago = _read_mean(history_path("savi", "1")) or last_savi_obs
+
+    # ── Primary: SAVI SARIMAX → Kc via thesis physics ────────────────────────
+    savi_model, savi_meta = _get_model("savi")
+    if savi_model is not None:
+        try:
+            exog_cols = savi_meta.get("exog_cols", ["doy_sin", "doy_cos"])
+            savi_exog = build_forecast_exog(future_dates, exog_cols=exog_cols)
+            savi_fc   = savi_model.get_forecast(
+                steps=len(future_dates), exog=savi_exog
+            )
+            savi_base = np.clip(
+                savi_fc.predicted_mean.values.astype(float), -0.1, 0.9
+            )
+
+            # Phenological adjustment: late-season maturation (DOY ≥ 95 ≈ April 5)
+            # Only enforce decline if observation confirms it (avoids overriding
+            # a genuine flat or rising signal before senescence).
+            ref_doy = future_dates[0].dayofyear
+            if ref_doy >= 95:
+                obs_slope_savi = last_savi_obs - savi_1d_ago   # observed 1-day slope
+                maturation_slope = -0.015                       # ~−0.22 SAVI over 15 days
+                if obs_slope_savi > maturation_slope:
+                    slope_adj = 0.35 * obs_slope_savi + 0.65 * maturation_slope
+                else:
+                    slope_adj = obs_slope_savi
+                days_ahead  = np.arange(1, len(future_dates) + 1, dtype=float)
+                savi_trend  = last_savi_obs + slope_adj * days_ahead
+                savi_base   = 0.65 * savi_base + 0.35 * savi_trend
+                logger.info(
+                    f"SAVI forecast: maturity slope applied "
+                    f"(doy={ref_doy}, adj={slope_adj:.4f})"
+                )
+
+            savi_base = np.clip(savi_base, -0.1, 0.9)
+
+            # Smooth transition: anchor day-1 to last observation, relax over 7 days
+            alpha         = np.exp(-np.arange(len(future_dates)) / 7.0)
+            savi_forecast = alpha * float(last_savi_obs) + (1 - alpha) * savi_base
+
+            # Physics: Kc from SAVI
+            kc_from_savi = savi_to_kc(savi_forecast)
+
+            logger.info(
+                f"Kc forecast via SAVI→Kc chain: "
+                f"SAVI_mean={savi_forecast.mean():.3f}, "
+                f"Kc_mean={kc_from_savi.mean():.3f}, "
+                f"range={kc_from_savi.min():.3f}–{kc_from_savi.max():.3f}"
+            )
+            return savi_forecast, kc_from_savi
+
+        except Exception as exc:
+            logger.warning(f"SAVI→Kc chain failed ({exc}) — using Kc fallback")
+
+    # ── Fallback: Kc SARIMAX + phenological trend ────────────────────────────
+    # FIX: increased SARIMAX weight from 0.15 → 0.60 (model was virtually ignored)
+    kc_model, kc_meta = _get_model("kc")
+    kc_1d_ago  = _read_mean(history_path("kc", "1")) or last_kc_obs
+    kc_3d_ago  = _read_mean(history_path("kc", "3")) or kc_1d_ago
 
     if kc_model is None:
         base = np.full(len(future_dates), float(last_kc_obs))
     else:
         try:
             exog_cols = kc_meta.get("exog_cols", ["doy_sin", "doy_cos"])
-            kc_exog = build_forecast_exog(
-                future_dates=future_dates,
-                exog_cols=exog_cols,
-            )
-            kc_fc = kc_model.get_forecast(steps=len(future_dates), exog=kc_exog)
-            base = kc_fc.predicted_mean.values.astype(float)
+            kc_exog   = build_forecast_exog(future_dates, exog_cols=exog_cols)
+            kc_fc     = kc_model.get_forecast(steps=len(future_dates), exog=kc_exog)
+            base      = kc_fc.predicted_mean.values.astype(float)
         except Exception as e:
             logger.warning(f"Kc SARIMAX failed: {e}")
             base = np.full(len(future_dates), float(last_kc_obs))
 
-    days_ahead = np.arange(1, len(future_dates) + 1, dtype=float)
+    days_ahead    = np.arange(1, len(future_dates) + 1, dtype=float)
+    recent_slope  = 0.6 * (last_kc_obs - kc_1d_ago) + 0.4 * (last_kc_obs - kc_3d_ago) / 3.0
+    ref_doy       = future_dates[0].dayofyear
 
-    recent_slope_1 = last_kc_obs - kc_1d_ago
-    recent_slope_3 = (last_kc_obs - kc_3d_ago) / 3.0
-    blended_slope  = 0.6 * recent_slope_1 + 0.4 * recent_slope_3
+    if ref_doy >= 95:
+        maturation_slope = -0.022
+        if recent_slope > maturation_slope:
+            recent_slope = 0.3 * recent_slope + 0.7 * maturation_slope
+            logger.info(f"Kc fallback: maturity decline applied (doy={ref_doy})")
 
-    # Late-season maturity enforcement (Maturation Stage)
-    # Thesis §5.3: Kc falls from 1.15 to 0.40 in April.
-    ref_doy = future_dates[0].dayofyear
-    
-    if ref_doy >= 95: # Around April 5
-        # Enforce a negative slope if it's late season but history is flat/rising
-        maturation_slope = -0.022 # Kc drops ~0.3 over 15 days (Thesis §5.3)
-        if blended_slope > maturation_slope:
-            # Blend the observed slope with the expected phenological decline
-            blended_slope = 0.3 * blended_slope + 0.7 * maturation_slope
-            logger.info(f"Kc forecast: Maturity decline applied (doy={ref_doy}, slope_adj={blended_slope:.4f})")
-
-    # Increase trend sensitivity to prevent persistence from damping the curve
-    trend = last_kc_obs + 0.85 * blended_slope * days_ahead
-
-    doy = future_dates.dayofyear.values.astype(float)
+    trend    = last_kc_obs + 0.85 * recent_slope * days_ahead
     seasonal = (
-        0.15 * np.sin(2 * np.pi * doy / 365.25) +
-        0.08 * np.cos(2 * np.pi * doy / 365.25)
+        0.15 * np.sin(2 * np.pi * future_dates.dayofyear.values / 365.25) +
+        0.08 * np.cos(2 * np.pi * future_dates.dayofyear.values / 365.25)
     )
 
-    # Shift weights from SARIMAX (persistence) even further towards Phenological Trend
-    # Add pseudo-random daily variation for realism
-    seed_val = int(future_dates[0].dayofyear)
-    state = np.random.RandomState(seed_val + 10) # Offset from Peff seed
-    kc_noise = state.normal(0, 0.015, len(future_dates))
-    
-    kc_final = 0.15 * base + 0.75 * trend + seasonal + kc_noise
-    kc_final = np.clip(kc_final, KC_MIN, KC_MAX)
+    # FIX: 60% SARIMAX weight (was 15%)
+    kc_final = np.clip(0.60 * base + 0.35 * trend + seasonal, KC_MIN, KC_MAX)
 
+    # Return an estimated SAVI via inverse physics for consistency
+    savi_est = np.clip((kc_final - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
     logger.info(
-        f"Kc forecast: last={last_kc_obs:.3f}, "
-        f"trend_mean={trend.mean():.3f}, "
-        f"slope={blended_slope:.4f}, "
-        f"range={kc_final.min():.3f}-{kc_final.max():.3f}"
+        f"Kc fallback: last={last_kc_obs:.3f}, "
+        f"trend_mean={trend.mean():.3f}, range={kc_final.min():.3f}–{kc_final.max():.3f}"
     )
-
-    return kc_final
+    return savi_est, kc_final
 
 
 def _climatological_peff(future_dates: pd.DatetimeIndex) -> np.ndarray:
-    """Fixed & simplified climatological effective rainfall for Rabi season."""
-    # In Uttarakhand Rabi wheat (Nov-Apr), rainfall is very low/scattered
-    # Thesis §5.5 mentions only 2-3 rainy days in March → Peff ≈ 0 most days
+    """Estimate effective rainfall from the last 7 days of rain rasters.
+
+    FIXES:
+    1. `raster_mean` is now imported at module level (was a failed local import).
+    2. Full USDA-SCS formula applied to the 5-day total (not divided by days).
+    3. Removed pseudo-random noise: noise ≠ physical Peff; it was adding ~0.25
+       mm/day of fake rainfall that inflated IWR uncertainty.
+
+    For Rabi wheat (Nov–Apr) in Haryana/Uttarakhand, mean seasonal rainfall is
+    low (< 5 mm/day most days), so Peff is near zero most of the forecast window.
+    This is physically correct per Thesis §5.5.
+    """
     rain_dir = DIRECTORIES["raw"].get("insat_rain")
     peff_scalar = 0.0
 
     if rain_dir and Path(rain_dir).exists():
-        rain_files = sorted(Path(rain_dir).glob("*.tif"))[-7:]  # last 7 days
+        rain_files = sorted(Path(rain_dir).glob("*.tif"))[-7:]
         if rain_files:
             try:
-                from models import raster_mean as rm  # if available, else fallback
-                recent = [rm(f, mask_zeros=False) for f in rain_files if f.exists()]
-                recent = [v for v in recent if not np.isnan(v) and v > 0]
-                if recent:
-                    total_rain = sum(recent)
-                    # Simple USDA-SCS approximation for small events
-                    peff_scalar = max(0.0, 0.7 * total_rain - 5.0) / max(len(recent), 5)
-            except Exception:
-                pass  # safe fallback
+                # raster_mean is now imported at module level — no local import needed
+                recent_vals = [
+                    raster_mean(f, mask_zeros=False)
+                    for f in rain_files if f.exists()
+                ]
+                recent_vals = [v for v in recent_vals if np.isfinite(v) and v >= 0]
 
-    logger.debug(f"[forecast] Climatological Peff ≈ {peff_scalar:.3f} mm/day")
-    
-    # Introduce pseudo-random daily variation for realism (spikes + noise)
-    # Using deterministic seed based on date so it's consistent across API calls for the same day
-    # We use the day of year as the seed.
-    seed_val = int(future_dates[0].dayofyear)
-    state = np.random.RandomState(seed_val)
-    
-    # Base variation (slight noise)
-    noise = state.normal(0, 0.05, len(future_dates)) 
-    
-    # Simulation of occasional rainfall spikes (Peff typically isn't a constant drizzle)
-    # Probability of a rain event is low in Rabi season.
-    spikes = state.choice([0, 1], size=len(future_dates), p=[0.85, 0.15])
-    spike_vals = state.uniform(0.5, 2.5, len(future_dates)) * spikes
-    
-    peff_values = np.maximum(0.0, peff_scalar + noise + spike_vals)
-    return peff_values
+                if recent_vals:
+                    # USDA-SCS effective rainfall formula:
+                    #   For P_total (mm over N days):
+                    #     Peff = 0.70 × P_total − 5.0  (for P_total > 7.1 mm)
+                    #     Peff = 0.82 × P_total − 0.91 (for P_total ≤ 7.1 mm)
+                    #   Then convert to daily average.
+                    p_total  = float(sum(recent_vals))
+                    n_days   = max(len(recent_vals), 1)
+                    if p_total > 7.1:
+                        peff_total = max(0.0, 0.70 * p_total - 5.0)
+                    else:
+                        peff_total = max(0.0, 0.82 * p_total - 0.91)
+                    peff_scalar = peff_total / n_days
+            except Exception as exc:
+                logger.debug(f"Peff calculation error: {exc}")
+
+    logger.info(f"[forecast] Peff ≈ {peff_scalar:.3f} mm/day (USDA-SCS, last 7-day rain)")
+
+    # Return constant daily Peff for the forecast window.
+    # A constant is more honest than fake random spikes when we have no
+    # actual forecast rainfall data.
+    return np.full(len(future_dates), peff_scalar, dtype=float)
+
 
 
 
@@ -550,18 +625,12 @@ def generate_forecast_for_date(
     # Thesis §5.4: PET rises from ~3.0 in Jan to peaks of 7.0+ in April.
     seasonal_pet = 5.5 + 3.2 * np.sin(2 * np.pi * (doy - 45) / 365.25)
 
-    # Add daily variation for realism
-    seed_val = int(future_dates[0].dayofyear)
-    state = np.random.RandomState(seed_val + 20)
-    pet_noise = state.normal(0, 0.25, days)
-
-    # Smoothed transition: alpha decays from 1.0 (last obs) to 0.0 (trend) over 5 days
+    # Smooth transition anchor: decays over 5 days
     alpha = np.exp(-np.arange(days) / 5.0)
 
     if pet_model is None:
         logger.warning("[forecast] PET model unavailable → using seasonal trend")
-        # Blend last obs (persistence) with seasonal trend using a decaying weight
-        pet_values = alpha * np.full(days, float(last_pet_obs)) + (1 - alpha) * seasonal_pet + pet_noise
+        pet_values = alpha * float(last_pet_obs) + (1 - alpha) * seasonal_pet
         pet_values = np.clip(pet_values, 1.5, 12.0)
         forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
     else:
@@ -572,15 +641,15 @@ def generate_forecast_for_date(
                 exog_cols=exog_cols,
             )
 
-            pet_fc     = pet_model.get_forecast(steps=days, exog=exog_df if not exog_df.empty else None)
-            base_pet   = pet_fc.predicted_mean.values.astype(float)
-            
-            # Blend SARIMAX (persistence-heavy) with the deterministic Seasonal Trend
-            # This ensures even a "flat" SARIMAX forecast becomes dynamic.
-            # We also apply a decaying weight to the last observation for smoother transition.
-            pet_values = (0.2 * base_pet + 0.8 * seasonal_pet) + pet_noise
-            
-            # Apply smoothing for the first few days to anchor to last observation
+            pet_fc   = pet_model.get_forecast(steps=days, exog=exog_df if not exog_df.empty else None)
+            base_pet = pet_fc.predicted_mean.values.astype(float)
+
+            # FIX: was 0.2 SARIMAX + 0.8 seasonal → model was basically ignored.
+            # Now 0.65 SARIMAX + 0.35 seasonal. The SARIMAX carries the actual
+            # learned pattern; seasonal is a soft regularizer for long-range days.
+            pet_values = 0.65 * base_pet + 0.35 * seasonal_pet
+
+            # Smooth first few days to last observation (removes jumps at t=1)
             pet_values = alpha * float(last_pet_obs) + (1 - alpha) * pet_values
             pet_values = np.clip(pet_values, 1.5, 12.0)
 
@@ -588,13 +657,16 @@ def generate_forecast_for_date(
 
         except Exception as e:
             logger.warning(f"[forecast] PET SARIMAX failed: {e} → seasonal fallback")
-            pet_values = alpha * np.full(days, float(last_pet_obs)) + (1 - alpha) * seasonal_pet + pet_noise
+            pet_values = alpha * float(last_pet_obs) + (1 - alpha) * seasonal_pet
             pet_values = np.clip(pet_values, 1.5, 12.0)
             forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
 
-    # ── 2. Project Kc using its own trained SARIMA + phenology ───────────
-    kc_projected = _project_kc_for_dates(future_dates)
-    forecasts["kc"] = pd.Series(kc_projected, index=future_dates, name="kc")
+    # ── 2. Forecast SAVI + derive Kc via physics ─────────────────────────────
+    # FIX: _project_kc_for_dates now returns (savi_arr, kc_arr).
+    # SAVI is forecasted via SARIMAX; Kc = KC_SLOPE × SAVI + KC_INTERCEPT.
+    savi_projected, kc_projected = _project_kc_for_dates(future_dates)
+    forecasts["savi"] = pd.Series(savi_projected, index=future_dates, name="savi")
+    forecasts["kc"]   = pd.Series(kc_projected,   index=future_dates, name="kc")
 
     # ── 3. Physics: CWR = Kc × PET ───────────────────────────────────────
     cwr_arr = np.clip(kc_projected * forecasts["pet"].values, CWR_MIN, CWR_MAX)
@@ -606,6 +678,7 @@ def generate_forecast_for_date(
     forecasts["iwr"] = pd.Series(iwr_arr, index=future_dates, name="iwr")
 
     logger.info(f"[forecast] Generated for {reference_date.date()}: "
+                f"SAVI_mean={forecasts['savi'].mean():.3f}, "
                 f"PET_mean={forecasts['pet'].mean():.2f}, "
                 f"Kc_mean={forecasts['kc'].mean():.3f}, "
                 f"CWR_mean={forecasts['cwr'].mean():.2f}, "
@@ -1122,7 +1195,7 @@ async def get_forecast(
         "forecasts":      {},
     }
 
-    for param in ("pet","kc", "cwr", "iwr"):
+    for param in ("savi", "pet", "kc", "cwr", "iwr"):
         if param in forecasts:
             series = forecasts[param]
             result["forecasts"][param] = {
@@ -1266,8 +1339,9 @@ async def manual_refresh():
 @app.get("/api/model/info")
 async def model_info():
     """Return metadata for all loaded models."""
-    pet_model, pet_meta = _get_model("pet")
-    kc_model, kc_meta   = _get_model("kc")
+    pet_model, pet_meta   = _get_model("pet")
+    kc_model,  kc_meta    = _get_model("kc")
+    savi_model, savi_meta = _get_model("savi")
 
     def _meta_dict(model, meta):
         if meta is None:
@@ -1288,20 +1362,22 @@ async def model_info():
 
     return {
         "models": {
-            "pet": _meta_dict(pet_model, pet_meta),
-            "kc": _meta_dict(kc_model, kc_meta),
+            "savi": _meta_dict(savi_model, savi_meta),
+            "pet":  _meta_dict(pet_model,  pet_meta),
+            "kc":   _meta_dict(kc_model,   kc_meta),
         },
         "forecast_chain": {
-            "step1": "PET forecasted with SARIMAX",
-            "step2": "Kc forecasted with SARIMAX + seasonal trend adjustment",
-            "step3": "CWR = Kc_projected × PET_forecast  (FAO-56 Eq. 4)",
-            "step4": "IWR = max(CWR − Peff_clim, 0)  (FAO-56 §4.5)",
+            "step1": "SAVI forecasted with SARIMAX (raw satellite signal)",
+            "step2": f"Kc derived from SAVI: Kc = {KC_SLOPE}×SAVI + {KC_INTERCEPT}  (thesis Eq.)",
+            "step3": "PET forecasted with SARIMAX (65% model, 35% seasonal)",
+            "step4": "CWR = Kc × PET  (FAO-56 Eq. 4)",
+            "step5": "IWR = max(CWR − Peff, 0)  (FAO-56 §4.5, USDA-SCS Peff)",
         },
         "physical_relationships": {
-            "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}",
-            "cwr": "CWR = Kc × PET  (computed)",
-            "iwr": "IWR = max(CWR − Peff, 0)  (computed)",
-            "peff": "USDA-SCS on 5-day interval rainfall total",
+            "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}  (thesis linear regression)",
+            "cwr":        "CWR = Kc × PET  (computed)",
+            "iwr":        "IWR = max(CWR − Peff, 0)  (computed)",
+            "peff":       "USDA-SCS on 7-day interval rainfall total",
         },
     }
 
@@ -1324,6 +1400,15 @@ def main():
         logger.info(f"✓ PET model ready (R²={pet_meta['metrics']['R2']:.4f})")
     else:
         logger.error("✗ Failed to initialise PET model")
+
+    savi_model, savi_meta = _get_model("savi")
+    if savi_model:
+        logger.info(
+            f"✓ SAVI model ready (R²={savi_meta['metrics']['R2']:.4f}) "
+            f"→ Kc via Kc={KC_SLOPE}×SAVI+{KC_INTERCEPT}"
+        )
+    else:
+        logger.warning("⚠ SAVI model not available — Kc fallback will be used")
 
     run_pipeline()
 
@@ -1350,28 +1435,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
