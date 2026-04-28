@@ -45,7 +45,7 @@
 html,
 body,
 #app {
-  height: 100%;
+  min-height: 100%;         /* ✅ FIXED: was height:100% — now content can grow */
 }
 
 body {
@@ -54,7 +54,7 @@ body {
   line-height: 1.5;
   color: var(--text-primary);
   background: var(--bg-secondary);
-  overflow: hidden;
+  overflow-x: hidden;       /* ✅ FIXED: was overflow:hidden — now only blocks horizontal scroll */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
