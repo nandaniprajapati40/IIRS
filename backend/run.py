@@ -382,7 +382,7 @@ def run_full_pipeline(processor: DataProcessor):
     run_etc(processor)
     run_cwr(processor)
     run_iwr(processor)
-    train_models()
+    # train_models()
     print("\n" + "=" * 65)
     print("  PIPELINE COMPLETE")
     print("=" * 65)

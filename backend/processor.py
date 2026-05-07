@@ -101,25 +101,27 @@ KC_MAX = 1.15   # Kc_mid (heading / flowering stage)
 
 def compute_effective_rainfall(P_interval_mm: float, interval_days: int) -> float:
     """
-    Realistic effective rainfall for INSAT-3D/3DR data in Uttarakhand Rabi season.
-    Handles many zero days + occasional high values.
+    FAO effective rainfall from thesis §4.5.
+
+    Thesis formula is monthly:
+        Pe = 0.6P - 10 for P <= 75 mm/month
+        Pe = 0.8P - 25 for P > 75 mm/month
+
+    For Sentinel/forecast periods shorter than a month, scale the monthly
+    threshold and fixed losses by interval_days / 30, then return mm/day.
     """
+    interval_days = max(int(interval_days), 1)
     if P_interval_mm <= 0:
         return 0.0
 
-    # Simple and robust method used in many Indian irrigation studies
-    if P_interval_mm < 5:           # Light rain
-        pe_total = P_interval_mm * 0.85
-    elif P_interval_mm < 20:        # Moderate rain
-        pe_total = P_interval_mm * 0.75
-    else:                           # Heavy rain (common overestimation in INSAT)
-        pe_total = P_interval_mm * 0.60   # Higher loss due to runoff
+    period_factor = interval_days / 30.0
+    threshold = 75.0 * period_factor
+    if P_interval_mm <= threshold:
+        pe_total = max(0.0, 0.6 * P_interval_mm - 10.0 * period_factor)
+    else:
+        pe_total = max(0.0, 0.8 * P_interval_mm - 25.0 * period_factor)
 
-    # Small fixed loss for very heavy days
-    if P_interval_mm > 30:
-        pe_total = max(0.0, pe_total - 8.0)
-
-    return pe_total / max(interval_days, 1)
+    return pe_total / interval_days
 # ═══════════════════════════════════════════════════════════════════════════
 # DataProcessor
 # ═══════════════════════════════════════════════════════════════════════════
@@ -777,11 +779,12 @@ class DataProcessor:
         # Threshold is scaled to the interval duration so the monthly-calibrated
         # formula applies correctly at the ~5-day Sentinel cadence.
         # See module-level compute_effective_rainfall() for scalar equivalent.
-        _pe_threshold = 75.0 * (float(n_days) / 30.0)
+        _period_factor = float(n_days) / 30.0
+        _pe_threshold = 75.0 * _period_factor
         eff_rain_interval = np.where(
             rain_interval <= _pe_threshold,
-            np.maximum(0.6 * rain_interval - 10.0, 0.0),   # P ≤ threshold
-            np.maximum(0.8 * rain_interval - 25.0, 0.0),   # P  > threshold
+            np.maximum(0.6 * rain_interval - 10.0 * _period_factor, 0.0),
+            np.maximum(0.8 * rain_interval - 25.0 * _period_factor, 0.0),
         )
         eff_rain_interval = np.maximum(eff_rain_interval, 0.0)
 

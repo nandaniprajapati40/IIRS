@@ -1,725 +1,762 @@
-"""
-models.py  –  SARIMA training & forecasting for Kc and PET
-Udham Singh Nagar wheat IWR pipeline
-
-ROOT-CAUSE FIXES applied in this version
-─────────────────────────────────────────
-FIX-A  Kc is computed FRESH from SAVI rasters via the thesis regression
-       (Kc = 1.2088·SAVI + 0.5375) instead of reading noisy pre-processed
-       Kc TIFs.  This gives the model clean, physics-consistent Kc values.
-
-FIX-B  PET SARIMA is a TRUE SARIMAX: district-mean daily rainfall from the
-       INSAT rain TIFs is included as an exogenous regressor so the model
-       knows wet vs dry days.  Forecast uses the mean seasonal rain cycle
-       as the future exog (climatological approach).
-
-FIX-C  Seasonal period corrected and justified:
-         • Kc  cadence = 5 days, Rabi season ≈ 36 pentads  →  s_kc  = 36
-         • PET cadence = 1 day,  Rabi season ≈ 181 days    →  s_pet = 181
-       With only 5 seasons of Kc data and 4 of PET the grid-search is now
-       bounded tightly (max_p=1, max_q=1, P∈{0,1}, Q∈{0,1}) to prevent
-       over-parameterisation.
-
-FIX-D  Hold-out size reduced to ONE THIRD of a season (not a full season)
-       so the training set always spans ≥ 2 complete seasonal cycles, which
-       is the minimum SARIMA needs for reliable seasonal estimation.
-
-FIX-E  IWR formula corrected:
-         IWR = max(CWR − Peff, 0)
-       Peff is derived from the rain TIFs (80 % of daily rainfall ≤ 5 mm,
-       per FAO-56 §3.3 simplified formula for Rabi wheat).
-
-FIX-F  raster_mean now handles INSAT scaling factors (values > 100 are
-       divided by the native scale so PET is always in mm/day, not in
-       tenths-of-mm).
-
-FIX-G  No more summer-gap skipping in _map_steps_to_dates – forecasts are
-       labelled with real calendar dates; the caller trims by is_rabi().
-"""
-
 from __future__ import annotations
-
 import logging
+import os
 import pickle
 import re
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import rasterio
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from rasterio.enums import Resampling
+from rasterio.warp import reproject
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PolynomialFeatures
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 
-# ── Directory configuration ──────────────────────────────────────────────────
-try:
-    from config import DIRECTORIES
-except ImportError:
-    BASE = Path(__file__).parent / "data"
-    DIRECTORIES = {
-        "raw": {
-            "insat_pet":  BASE / "raw/insat_pet",
-            "insat_rain": BASE / "raw/insat_rain",
-        },
-        "processed": {
-            "savi": BASE / "processed/savi",   # Sentinel-2 SAVI TIFs (primary)
-            "kc":   BASE / "processed/kc",     # fallback only if SAVI missing
-        },
-        "models": BASE / "models",
-    }
+from config import DIRECTORIES
 
-MODEL_DIR = Path(DIRECTORIES["models"])
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+# ── Directory paths ──────────────────────────────────────────────────────────
+PET_DIR  = DIRECTORIES["raw"]["insat_pet"]
+KC_DIR   = DIRECTORIES["processed"]["kc"]
+SAVI_DIR = DIRECTORIES["processed"]["savi"]
+CWR_DIR  = DIRECTORIES["processed"]["cwr"]
+RAIN_DIR = DIRECTORIES["raw"]["insat_rain"]
+WHEAT_MASK_PATH = DIRECTORIES["processed"]["masks"] / "wheat_mask.tif"
 
+MODEL_DIR = DIRECTORIES["models"]
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# ── Model file paths ─────────────────────────────────────────────────────────
 KC_MODEL_PATH  = MODEL_DIR / "sarima_wheat_kc.pkl"
 PET_MODEL_PATH = MODEL_DIR / "sarima_wheat_pet.pkl"
 
-# ── Physical bounds ───────────────────────────────────────────────────────────
-KC_MIN,   KC_MAX   = 0.30, 1.15      # thesis Table 9
-PET_MIN,  PET_MAX  = 0.5,  15.0     # mm/day
-SAVI_MIN, SAVI_MAX = 0.0,  0.90
-RAIN_MIN, RAIN_MAX = 0.0,  150.0    # mm/day
-NODATA = -9999.0
-
-# Thesis linear regression  Kc = slope·SAVI + intercept  (R²=0.882, Table 9)
+# ── Physical constants from THESIS Table 9 ─────────────────────────────────
+# SAVI vs FAO Moving Averaged Kc: Kc = 1.2088 * SAVI + 0.5375 (R² = 0.88)
+# This is the REGRESSION equation — SAVI → Kc (§4.3)
 KC_SLOPE     = 1.2088
 KC_INTERCEPT = 0.5375
+KC_MIN       = 0.30
+KC_MAX       = 1.15
+SEASON_LENGTH_DAYS = 150
+MAX_MEAN_PIXELS = 2_000_000
 
-# Rabi season (Nov–Apr)
-RABI_START_MONTH = 11
-RABI_END_MONTH   = 4
-
-# Sensor cadence
-KC_CADENCE_DAYS  = 5    # Sentinel-2 pentad
-PET_CADENCE_DAYS = 1    # INSAT daily
-
-# Seasonal periods – one full Rabi season
-S_KC  = 36    # 6 months × 30.4 d / 5 d ≈ 36 pentads
-S_PET = 181   # 6 months × 30.4 d / 1 d ≈ 181 days
-
-# FAO-56 §3.3 effective rainfall fraction for Rabi wheat
-# Peff = RAIN_FRACTION × rain   (rain is small in Rabi, so most is effective)
-RAIN_EFFECTIVE_FRACTION = 0.80
+_WHEAT_MASK_CACHE: Dict[tuple, np.ndarray] = {}
+_WHEAT_MASK_WARNED = False
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def extract_date(filename: str) -> Optional[datetime]:
-    """Parse YYYYMMDD, DDMMMYYYY (INSAT), or YYYY-MM-DD from filename."""
-    for pattern, fmt in [
-        (r"(\d{8})",               "%Y%m%d"),
-        (r"(\d{2}[A-Z]{3}\d{4})", "%d%b%Y"),
-        (r"(\d{4}-\d{2}-\d{2})",  "%Y-%m-%d"),
-    ]:
-        m = re.search(pattern, filename.upper())
-        if m:
+# ═══════════════════════════════════════════════════════════════════════════
+# Utilities
+# ═══════════════════════════════════════════════════════════════════════════
+
+def extract_date(filename: str) -> datetime:
+    m = re.search(r"\d{8}", filename)
+    if m:
+        return datetime.strptime(m.group(), "%Y%m%d")
+    m = re.search(r"\d{2}[A-Z]{3}\d{4}", filename.upper())
+    if m:
+        return datetime.strptime(m.group(), "%d%b%Y")
+    raise ValueError(f"No valid date in: {filename}")
+
+def build_date_file_map(directory: Optional[Path]) -> Dict[datetime, Path]:
+    fm: Dict[datetime, Path] = {}
+    if directory is None or not directory.exists():
+        return fm
+    for fp in directory.glob("*"):
+        if fp.suffix.lower() in {".tif", ".tiff"}:
             try:
-                return datetime.strptime(m.group(1), fmt)
-            except ValueError:
+                fm[extract_date(fp.name)] = fp
+            except Exception:
                 pass
-    logger.debug("Cannot extract date from: %s", filename)
-    return None
-
+    return fm
 
 def is_rabi(date: datetime) -> bool:
-    """True if the date falls in the Rabi growing season (Nov–Apr)."""
-    return date.month >= RABI_START_MONTH or date.month <= RABI_END_MONTH
+    """Rabi season: Nov 15 to Apr 30 (thesis §3.1, §5.6)"""
+    return (date.month == 11 and date.day >= 15) or date.month in [12, 1, 2, 3, 4]
 
+def _season_start_year(date: datetime) -> int:
+    return date.year if date.month >= 11 else date.year - 1
 
-# FIX-F: scale-aware raster reader
-def raster_mean(path: Path,
-                valid_min: float = None,
-                valid_max: float = None,
-                scale_threshold: float = 50.0,
-                scale_factor: float = 0.1) -> float:
-    """
-    Spatial mean of valid pixels.
+def _season_sowing_date(date: datetime) -> datetime:
+    return datetime(_season_start_year(date), 11, 15)
 
-    If the raw raster mean exceeds `scale_threshold` (e.g. INSAT stores PET
-    in tenths-of-mm so values are 10× too large), the values are multiplied
-    by `scale_factor` to bring them to physical units.
+def _das_norm(date: datetime) -> float:
+    return float(np.clip(days_after_sowing(date) / SEASON_LENGTH_DAYS, 0.0, 1.0))
 
-    valid_min / valid_max: clip before returning (use physical bounds).
-    """
+def _wheat_mask_for_raster(src) -> Optional[np.ndarray]:
+    global _WHEAT_MASK_WARNED
+
+    if not WHEAT_MASK_PATH.exists():
+        if not _WHEAT_MASK_WARNED:
+            logger.warning("wheat_mask.tif not found at %s; raster means are unmasked", WHEAT_MASK_PATH)
+            _WHEAT_MASK_WARNED = True
+        return None
+
+    if src.crs is None:
+        logger.warning("Cannot apply wheat mask to %s because raster CRS is missing", src.name)
+        return None
+
+    transform_key = tuple(round(v, 9) for v in src.transform)
+    cache_key = (src.height, src.width, src.crs.to_string(), transform_key)
+    if cache_key in _WHEAT_MASK_CACHE:
+        return _WHEAT_MASK_CACHE[cache_key]
+
+    with rasterio.open(WHEAT_MASK_PATH) as mask_src:
+        mask_raw = mask_src.read(1).astype("float32")
+        same_grid = (
+            mask_src.crs == src.crs
+            and mask_src.transform == src.transform
+            and mask_src.height == src.height
+            and mask_src.width == src.width
+        )
+
+        if same_grid:
+            mask_data = mask_raw
+        else:
+            mask_data = np.zeros((src.height, src.width), dtype="float32")
+            reproject(
+                source=mask_raw,
+                destination=mask_data,
+                src_transform=mask_src.transform,
+                src_crs=mask_src.crs,
+                dst_transform=src.transform,
+                dst_crs=src.crs,
+                src_nodata=mask_src.nodata if mask_src.nodata is not None else 0,
+                dst_nodata=0,
+                resampling=Resampling.average,
+            )
+
+    wheat_mask = mask_data > 0
+    if not np.any(wheat_mask):
+        logger.warning("Wheat mask has no overlap with %s; falling back to unmasked mean", src.name)
+        return None
+
+    _WHEAT_MASK_CACHE[cache_key] = wheat_mask
+    return wheat_mask
+
+def _mean_out_shape(src, apply_crop_mask: bool) -> Optional[Tuple[int, int]]:
+    if apply_crop_mask:
+        return None
+
+    n_pixels = src.height * src.width
+    if n_pixels <= MAX_MEAN_PIXELS:
+        return None
+
+    scale = np.sqrt(MAX_MEAN_PIXELS / float(n_pixels))
+    return max(1, int(src.height * scale)), max(1, int(src.width * scale))
+
+def raster_mean(fp: Path, mask_zeros: bool = True, apply_crop_mask: bool = True) -> float:
     try:
-        with rasterio.open(path) as src:
-            data = src.read(1).astype(np.float64)
-            nd   = src.nodata if src.nodata is not None else NODATA
-            data[data == nd]       = np.nan
-            data[data == NODATA]   = np.nan
-            data[data < -999]      = np.nan
+        with rasterio.open(fp) as src:
+            if not apply_crop_mask:
+                try:
+                    stats = src.statistics(1, approx=True)
+                    mean_val = float(stats.mean)
+                    if np.isfinite(mean_val) and (not mask_zeros or float(stats.min) != 0.0):
+                        return mean_val
+                except Exception:
+                    pass
 
-            raw_mean = float(np.nanmean(data))
-
-            # FIX-F: auto-detect INSAT integer encoding (tenths of mm)
-            if not np.isnan(raw_mean) and raw_mean > scale_threshold:
-                data = data * scale_factor
-
-            if valid_min is not None:
-                data[data < valid_min] = np.nan
-            if valid_max is not None:
-                data[data > valid_max] = np.nan
-
-            return float(np.nanmean(data))
-    except Exception as exc:
-        logger.debug("raster_mean failed for %s: %s", path, exc)
+            out_shape = _mean_out_shape(src, apply_crop_mask)
+            if out_shape is None:
+                data = src.read(1, masked=True)
+            else:
+                data = src.read(
+                    1,
+                    out_shape=out_shape,
+                    masked=True,
+                    resampling=Resampling.average,
+                )
+            arr = np.ma.filled(data, np.nan).astype(np.float64)
+            if src.nodata is not None:
+                arr[arr == src.nodata] = np.nan
+            arr[arr < -900] = np.nan
+            if mask_zeros:
+                arr[arr == 0] = np.nan
+            if apply_crop_mask:
+                wheat_mask = _wheat_mask_for_raster(src)
+                if wheat_mask is not None:
+                    arr[~wheat_mask] = np.nan
+            arr = arr[~np.isnan(arr)]
+            return float(np.mean(arr)) if len(arr) > 0 else np.nan
+    except Exception:
         return np.nan
 
+def _doy_sin_cos(doy_series):
+    angle = 2.0 * np.pi * np.asarray(doy_series, dtype=float) / 365.0
+    return np.sin(angle), np.cos(angle)
 
-# ── Series builders ───────────────────────────────────────────────────────────
-
-# FIX-A: Kc comes from SAVI rasters, not pre-processed Kc TIFs
-def build_kc_series() -> Tuple[np.ndarray, List[datetime]]:
+def savi_to_kc(savi: np.ndarray) -> np.ndarray:
+    """Thesis §4.3, Table 9: Kc = 1.2088 * SAVI + 0.5375 (R² = 0.88)
+    
+    This is the regression relationship used to derive historical Kc maps
+    from Sentinel-2 SAVI. SARIMAX still forecasts Kc directly, while SAVI can
+    be used as an exogenous phenology signal.
     """
-    Compute Kc from SAVI rasters using the thesis regression:
-        Kc = KC_SLOPE · SAVI + KC_INTERCEPT
+    return np.clip(KC_SLOPE * np.asarray(savi, dtype=float) + KC_INTERCEPT, KC_MIN, KC_MAX)
 
-    Falls back to the pre-processed Kc TIFs only when the SAVI directory
-    is absent or empty, but logs a prominent warning in that case because
-    pre-processed Kc files add spatial averaging noise.
+def kc_to_savi(kc: np.ndarray) -> np.ndarray:
+    """Inverse of the thesis SAVI-to-Kc regression for feature generation."""
+    return np.clip((np.asarray(kc, dtype=float) - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
+
+def _effective_rainfall(rain_sum: float, interval_days: int) -> float:
+    """FAO effective rainfall scaled from monthly formula to interval total."""
+    period_factor = max(float(interval_days), 1.0) / 30.0
+    pe_threshold = 75.0 * period_factor
+    if rain_sum <= pe_threshold:
+        return max(0.6 * rain_sum - 10.0 * period_factor, 0.0)
+    return max(0.8 * rain_sum - 25.0 * period_factor, 0.0)
+
+def set_forecast_context(
+    last_savi: float,
+    last_kc: float = 0.75,
+    last_pet: Optional[float] = None,
+) -> None:
+    """Store last observed values for forecast initialization"""
+    build_forecast_exog._last_savi = float(last_savi)
+    build_forecast_exog._last_kc = float(last_kc)
+    build_forecast_exog._last_pet = None if last_pet is None else float(last_pet)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Metrics
+# ═══════════════════════════════════════════════════════════════════════════
+
+def compute_validation_metrics(observed, predicted) -> dict:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    valid = ~(np.isnan(obs) | np.isnan(pred))
+    obs, pred = obs[valid], pred[valid]
+    if len(obs) < 2:
+        return {k: np.nan for k in ("R2", "NSE", "RMSE", "MAE", "MAPE")}
+    ss_res = np.sum((obs - pred) ** 2)
+    ss_tot = np.sum((obs - np.mean(obs)) ** 2)
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+    rmse = float(np.sqrt(mean_squared_error(obs, pred)))
+    mae = float(mean_absolute_error(obs, pred))
+    nz = np.abs(obs) > 1e-9
+    mape = float(np.mean(np.abs((obs[nz] - pred[nz]) / obs[nz])) * 100) if nz.any() else np.nan
+    return {"R2": round(r2, 4), "NSE": round(r2, 4), "RMSE": round(rmse, 4),
+            "MAE": round(mae, 4), "MAPE": round(mape, 2)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Forecast exog builder
+# ═══════════════════════════════════════════════════════════════════════════
+
+def build_forecast_exog(future_dates: "pd.DatetimeIndex", exog_cols: list) -> "pd.DataFrame":
     """
-    savi_dir = Path(DIRECTORIES["processed"]["savi"])
-    kc_dir   = Path(DIRECTORIES["processed"]["kc"])
+    Build out-of-sample regressors for trained SARIMAX models.
 
-    # Prefer SAVI directory
-    source_dir = None
-    use_regression = False
+    Kc models may include SAVI-derived predictors. Future SAVI is estimated
+    from the latest observed SAVI/Kc blended toward FAO-56 stage Kc.
+    PET remains meteorological and uses its saved Fourier/month/lag columns.
+    """
+    n = len(future_dates)
+    doy = np.array([d.timetuple().tm_yday for d in future_dates], dtype=float)
+    angle = 2.0 * np.pi * doy / 365.0
+    angle2 = 4.0 * np.pi * doy / 365.0
+    last_savi = float(getattr(build_forecast_exog, "_last_savi", 0.25))
+    last_kc = float(getattr(build_forecast_exog, "_last_kc", KC_INTERCEPT + KC_SLOPE * last_savi))
+    last_pet = getattr(build_forecast_exog, "_last_pet", None)
+    if last_pet is None or not np.isfinite(last_pet):
+        last_pet = 4.0
+    last_pet = float(last_pet)
 
-    if savi_dir.exists() and list(savi_dir.glob("*.tif")):
-        source_dir     = savi_dir
-        use_regression = True
-        logger.info("Kc: using SAVI→Kc regression from %s", savi_dir)
-    elif kc_dir.exists() and list(kc_dir.glob("*.tif")):
-        source_dir     = kc_dir
-        use_regression = False
-        logger.warning(
-            "Kc: SAVI directory missing or empty – falling back to pre-processed "
-            "Kc TIFs.  This may add noise; provide SAVI rasters for best results."
-        )
-    else:
-        raise FileNotFoundError(
-            "Neither SAVI nor Kc raster directory found. "
-            f"Expected: {savi_dir}  or  {kc_dir}"
-        )
+    stage_kc = np.array([
+        get_wheat_stage_kc(d.to_pydatetime() if hasattr(d, "to_pydatetime") else d)[1]
+        for d in future_dates
+    ], dtype=float)
+    alpha = np.exp(-np.arange(n, dtype=float) / 5.0)
+    kc_context = np.clip(alpha * last_kc + (1.0 - alpha) * stage_kc, KC_MIN, KC_MAX)
+    savi_context = kc_to_savi(kc_context)
+    savi_diff = np.diff(np.r_[last_savi, savi_context])
+    savi_trend = pd.Series(savi_context).rolling(5, min_periods=1).mean().values
+    das = np.array([
+        days_after_sowing(d.to_pydatetime() if hasattr(d, "to_pydatetime") else d)
+        for d in future_dates
+    ], dtype=float)
 
-    files = sorted(source_dir.glob("*.tif"))
-    records: List[Tuple[datetime, float]] = []
-
-    for fp in files:
-        d = extract_date(fp.name)
-        if d is None or not is_rabi(d):
-            continue
-        if use_regression:
-            savi = raster_mean(fp, valid_min=SAVI_MIN, valid_max=SAVI_MAX)
-            if np.isnan(savi):
-                continue
-            kc = float(np.clip(KC_SLOPE * savi + KC_INTERCEPT, KC_MIN, KC_MAX))
+    seasonal_pet = 5.5 + 3.2 * np.sin(2.0 * np.pi * (doy - 45.0) / 365.25)
+    pet_context = np.clip(seasonal_pet, 0.0, 20.0)
+    pet_lag1 = np.r_[last_pet, pet_context[:-1]][:n]
+    pet_lag2 = np.r_[last_pet, last_pet, pet_context[:-2]][:n]
+    
+    feature_map = {
+        "sin_doy":   np.sin(angle),
+        "cos_doy":   np.cos(angle),
+        "sin2_doy":  np.sin(angle2),
+        "cos2_doy":  np.cos(angle2),
+        "month":     np.array([d.month for d in future_dates], dtype=float),
+        "das":       das,
+        "das_norm":  np.clip(das / SEASON_LENGTH_DAYS, 0.0, 1.0),
+        "savi":      savi_context,
+        "savi_diff": savi_diff,
+        "savi_trend": savi_trend,
+        "savi_kc":   savi_to_kc(savi_context),
+        "kc_stage":  stage_kc,
+        "kc_context": kc_context,
+        "pet_lag1":  pet_lag1,
+        "pet_lag2":  pet_lag2,
+        "pet_log":   np.log1p(pet_context),
+    }
+    rows: dict = {}
+    for col in exog_cols:
+        if col in feature_map:
+            rows[col] = feature_map[col]
         else:
-            kc = raster_mean(fp, valid_min=KC_MIN, valid_max=KC_MAX)
-            if np.isnan(kc):
-                continue
-        records.append((d, kc))
-
-    if not records:
-        raise ValueError("No valid Rabi SAVI/Kc rasters found.")
-
-    records.sort(key=lambda x: x[0])
-    dates  = [r[0] for r in records]
-    values = np.array([r[1] for r in records], dtype=float)
-
-    logger.info("Kc: %d points  %s → %s  (cadence≈%dd)",
-                len(values), dates[0].date(), dates[-1].date(), KC_CADENCE_DAYS)
-    return values, dates
+            logger.warning("Unknown column '%s' — zeros", col)
+            rows[col] = np.zeros(n)
+    return pd.DataFrame(rows, index=future_dates)
 
 
-# FIX-B: PET series + rain exog built together so dates are always aligned
-def build_pet_rain_series() -> Tuple[np.ndarray, np.ndarray, List[datetime]]:
+# ═══════════════════════════════════════════════════════════════════════════
+# Dataset loaders — THESIS COMPLIANT
+# ═══════════════════════════════════════════════════════════════════════════
+
+def load_wheat_kc_dataset() -> pd.DataFrame:
     """
-    Read INSAT PET and INSAT rain TIFs.
-    Returns (pet_values, rain_values, dates) aligned by date.
-    Only dates that have BOTH a PET and a rain raster are kept.
+    Load Kc time series from processed rasters and enrich it with crop-stage
+    and SAVI dynamics so the model can learn phenology from existing data.
     """
-    pet_dir  = Path(DIRECTORIES["raw"]["insat_pet"])
-    rain_dir = Path(DIRECTORIES["raw"]["insat_rain"])
-
-    if not pet_dir.exists():
-        raise FileNotFoundError(f"PET directory not found: {pet_dir}")
-    if not rain_dir.exists():
-        logger.warning("Rain directory not found: %s – PET model will have no exog.", rain_dir)
-        rain_dir = None
-
-    # Build date→path maps
-    def date_map(d: Path) -> Dict[datetime, Path]:
-        m = {}
-        for fp in sorted(d.glob("*.tif")):
-            dt = extract_date(fp.name)
-            if dt and is_rabi(dt):
-                m[dt] = fp
-        return m
-
-    pet_map  = date_map(pet_dir)
-    rain_map = date_map(rain_dir) if rain_dir else {}
-
-    common_dates = sorted(pet_map.keys())   # use all PET dates
-
-    pet_vals,  rain_vals, good_dates = [], [], []
-
-    for d in common_dates:
-        pet_v = raster_mean(pet_map[d],
-                            valid_min=PET_MIN, valid_max=PET_MAX,
-                            scale_threshold=50.0, scale_factor=0.1)
-        if np.isnan(pet_v):
+    logger.info("Loading Kc dataset for SARIMAX training...")
+    kc_map = build_date_file_map(KC_DIR)
+    
+    if not kc_map:
+        raise RuntimeError("No Kc rasters found in processed/kc/")
+    
+    records = []
+    for date, kc_fp in sorted(kc_map.items()):
+        if not is_rabi(date):
             continue
-
-        if d in rain_map:
-            rain_v = raster_mean(rain_map[d],
-                                 valid_min=RAIN_MIN, valid_max=RAIN_MAX,
-                                 scale_threshold=500.0, scale_factor=0.1)
-            rain_v = 0.0 if np.isnan(rain_v) else rain_v
-        else:
-            rain_v = 0.0  # assume no rain if file missing
-
-        pet_vals.append(pet_v)
-        rain_vals.append(rain_v)
-        good_dates.append(d)
-
-    if not good_dates:
-        raise ValueError("No valid Rabi PET rasters found.")
-
-    pet_arr  = np.array(pet_vals,  dtype=float)
-    rain_arr = np.array(rain_vals, dtype=float)
-
-    logger.info("PET: %d points  %s → %s  (cadence≈%dd)",
-                len(pet_arr), good_dates[0].date(), good_dates[-1].date(),
-                PET_CADENCE_DAYS)
-    return pet_arr, rain_arr, good_dates
-
-
-# ── SARIMA order search ───────────────────────────────────────────────────────
-def find_best_order(series: pd.Series, s: int,
-                    exog: pd.Series = None,
-                    max_p: int = 1,
-                    max_q: int = 1) -> Tuple[tuple, tuple]:
-    """
-    Grid search SARIMA(p,1,q)(P,1,Q,s) by AIC.
-    max_p=1, max_q=1 to prevent over-fitting on short Rabi records (FIX-C).
-    """
-    best_aic   = float("inf")
-    best_order = (1, 1, 1)
-    best_seas  = (0, 1, 1, s)
-
-    for p in range(max_p + 1):
-        for q in range(max_q + 1):
-            for P in range(2):
-                for Q in range(2):
-                    if p == 0 and q == 0 and P == 0 and Q == 0:
-                        continue
-                    try:
-                        res = SARIMAX(
-                            series,
-                            exog=exog,
-                            order=(p, 1, q),
-                            seasonal_order=(P, 1, Q, s),
-                            enforce_stationarity=False,
-                            enforce_invertibility=False,
-                        ).fit(disp=False, maxiter=500)
-                        if res.aic < best_aic:
-                            best_aic   = res.aic
-                            best_order = (p, 1, q)
-                            best_seas  = (P, 1, Q, s)
-                    except Exception:
-                        continue
-
-    logger.info("Best SARIMA%s%s  AIC=%.2f", best_order, best_seas, best_aic)
-    return best_order, best_seas
-
-
-# ── SARIMA fit ────────────────────────────────────────────────────────────────
-def fit_sarima(values: np.ndarray, s: int, label: str,
-               exog: np.ndarray = None,
-               auto: bool = True) -> "SARIMAXResultsWrapper":
-    """
-    Fit SARIMA(X) on a plain RangeIndex series (no DatetimeIndex gaps).
-    Pass exog for SARIMAX (PET model uses rain as exog – FIX-B).
-    """
-    series   = pd.Series(values, dtype=float)
-    exog_ser = pd.Series(exog,   dtype=float) if exog is not None else None
-
-    min_pts = 2 * s + 10
-    if auto and len(series) >= min_pts:
-        order, seas = find_best_order(series, s, exog=exog_ser)
-    else:
-        logger.warning(
-            "%s: only %d points (need %d for grid search) – using default SARIMA(1,1,1)(0,1,1,%d)",
-            label, len(series), min_pts, s
-        )
-        order, seas = (1, 1, 1), (0, 1, 1, s)
-
-    logger.info("%s: fitting SARIMA%s%s on %d points", label, order, seas, len(series))
-    res = SARIMAX(
-        series,
-        exog=exog_ser,
-        order=order,
-        seasonal_order=seas,
-        enforce_stationarity=False,
-        enforce_invertibility=False,
-    ).fit(disp=False, maxiter=500)
-
-    logger.info("%s: AIC=%.2f  BIC=%.2f  resid_mean=%.6f",
-                label, res.aic, res.bic, res.resid.mean())
-
-    try:
-        from statsmodels.stats.diagnostic import acorr_ljungbox
-        lb = acorr_ljungbox(res.resid.dropna(), lags=[10], return_df=True)
-        p  = lb["lb_pvalue"].iloc[0]
-        logger.info("%s: Ljung-Box p=%.4f (%s)",
-                    label, p, "white noise ✓" if p > 0.05 else "autocorr present – consider larger p/q")
-    except Exception:
-        pass
-
-    return res
-
-
-# ── Hold-out evaluation ───────────────────────────────────────────────────────
-def evaluate(values: np.ndarray, s: int, label: str,
-             exog: np.ndarray = None,
-             test_n: int = None) -> Dict:
-    """
-    Hold-out evaluation.
-    FIX-D: test_n defaults to s//3 (one-third season) so training always
-    covers ≥ 2 full seasonal cycles.
-    """
-    if test_n is None:
-        test_n = max(s // 3, 5)   # e.g. 12 pentads for Kc, 60 days for PET
-
-    if len(values) < test_n + 2 * s:
-        logger.warning(
-            "%s: too few points (%d) for hold-out evaluation (need %d) – skipping.",
-            label, len(values), test_n + 2 * s
-        )
-        return {"R2": np.nan, "RMSE": np.nan, "MAE": np.nan}
-
-    train_vals = values[:-test_n]
-    test_vals  = values[-test_n:]
-    train_exog = exog[:-test_n] if exog is not None else None
-    test_exog  = exog[-test_n:] if exog is not None else None
-
-    res  = fit_sarima(train_vals, s, f"{label}_train", exog=train_exog, auto=True)
-    pred = res.get_forecast(steps=test_n,
-                            exog=test_exog).predicted_mean.values
-
-    r2   = r2_score(test_vals, pred)
-    rmse = float(np.sqrt(mean_squared_error(test_vals, pred)))
-    mae  = float(mean_absolute_error(test_vals, pred))
-    logger.info("%s hold-out (%d pts): R²=%.4f  RMSE=%.4f  MAE=%.4f",
-                label, test_n, r2, rmse, mae)
-    return {"R2": r2, "RMSE": rmse, "MAE": mae}
-
-
-# ── Train & save ──────────────────────────────────────────────────────────────
-def train_all_models() -> Dict[str, Dict]:
-    """
-    Main entry point:
-      1. Load rasters → build native-cadence series
-      2. Evaluate with hold-out
-      3. Refit on ALL data
-      4. Save .pkl
-
-    Returns hold-out metrics for Kc and PET.
-    """
-    results: Dict[str, Dict] = {}
-
-    # ── Kc (from SAVI rasters via regression) ────────────────────────────────
-    try:
-        kc_vals, kc_dates = build_kc_series()   # FIX-A
-
-        kc_metrics = evaluate(kc_vals, S_KC, "Kc")   # FIX-D default test_n
-        kc_res     = fit_sarima(kc_vals, S_KC, "Kc_final", auto=True)
-
-        with open(KC_MODEL_PATH, "wb") as f:
-            pickle.dump({
-                "model":   kc_res,
-                "values":  kc_vals,
-                "dates":   kc_dates,
-                "s":       S_KC,
-                "cadence": KC_CADENCE_DAYS,
-                "meta": {
-                    "metrics":   kc_metrics,
-                    "last_date": kc_dates[-1],
-                    "n_obs":     len(kc_vals),
-                    "source":    "SAVI→regression",
-                },
-            }, f)
-        logger.info("Kc model saved → %s", KC_MODEL_PATH)
-        results["kc"] = kc_metrics
-
-    except Exception as exc:
-        logger.error("Kc training failed: %s", exc, exc_info=True)
-        results["kc"] = {"R2": np.nan, "RMSE": np.nan, "MAE": np.nan}
-
-    # ── PET (SARIMAX with rain as exog) ───────────────────────────────────────
-    try:
-        pet_vals, rain_vals, pet_dates = build_pet_rain_series()   # FIX-B
-
-        pet_metrics = evaluate(pet_vals, S_PET, "PET", exog=rain_vals)
-        pet_res     = fit_sarima(pet_vals, S_PET, "PET_final",
-                                 exog=rain_vals, auto=True)
-
-        # Store seasonal climatological rain for future forecasts
-        # (mean rain by day-of-season index)
-        rain_clim = _compute_rain_climatology(rain_vals, S_PET)
-
-        with open(PET_MODEL_PATH, "wb") as f:
-            pickle.dump({
-                "model":       pet_res,
-                "values":      pet_vals,
-                "rain_values": rain_vals,
-                "dates":       pet_dates,
-                "s":           S_PET,
-                "cadence":     PET_CADENCE_DAYS,
-                "rain_clim":   rain_clim,   # used as future exog
-                "meta": {
-                    "metrics":   pet_metrics,
-                    "last_date": pet_dates[-1],
-                    "n_obs":     len(pet_vals),
-                },
-            }, f)
-        logger.info("PET model saved → %s", PET_MODEL_PATH)
-        results["pet"] = pet_metrics
-
-    except Exception as exc:
-        logger.error("PET training failed: %s", exc, exc_info=True)
-        results["pet"] = {"R2": np.nan, "RMSE": np.nan, "MAE": np.nan}
-
-    logger.info("Training complete — Kc R²=%.4f  PET R²=%.4f",
-                results["kc"].get("R2", float("nan")),
-                results["pet"].get("R2", float("nan")))
-    return results
-
-
-def _compute_rain_climatology(rain_vals: np.ndarray, s: int) -> np.ndarray:
-    """
-    Mean rain by position within the seasonal cycle (length s).
-    Used as the best estimate of future rain for PET forecasting.
-    """
-    n       = len(rain_vals)
-    n_full  = (n // s) * s
-    if n_full == 0:
-        return np.zeros(s)
-    mat  = rain_vals[:n_full].reshape(-1, s)
-    clim = mat.mean(axis=0)
-    return clim
-
-
-# ── Load models ───────────────────────────────────────────────────────────────
-def load_model(model_type: str) -> dict:
-    """Load pkl for 'kc' or 'pet'. Trains if missing."""
-    path = KC_MODEL_PATH if model_type == "kc" else PET_MODEL_PATH
-    if not path.exists():
-        logger.warning("Model %s not found – training now …", path)
-        train_all_models()
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
-# ── Forecast helpers ──────────────────────────────────────────────────────────
-def _future_rain_exog(rain_clim: np.ndarray,
-                      last_date: datetime,
-                      steps: int) -> np.ndarray:
-    """
-    Build `steps` days of future rain using the seasonal climatology.
-    day_of_season is determined by distance from Nov-1 (Rabi start).
-    """
-    s    = len(rain_clim)
-    exog = []
-    cur  = last_date
-    for _ in range(steps):
-        cur = cur + timedelta(days=1)
-        # Position within the seasonal cycle (0-based)
-        rabi_start = datetime(cur.year if cur.month >= 11 else cur.year - 1, 11, 1)
-        pos = (cur - rabi_start).days % s
-        exog.append(rain_clim[pos])
-    return np.array(exog, dtype=float)
-
-
-def _map_steps_to_dates(last_date: datetime,
-                        cadence: int,
-                        steps: int) -> List[datetime]:
-    """Generate forecast dates at native cadence. All calendar dates included."""
-    return [last_date + timedelta(days=(i + 1) * cadence) for i in range(steps)]
-
-
-def forecast_series_kc(steps: int) -> Tuple[np.ndarray, List[datetime]]:
-    obj       = load_model("kc")
-    res       = obj["model"]
-    last_date = obj["meta"]["last_date"]
-
-    raw  = res.get_forecast(steps=steps).predicted_mean.values.astype(float)
-    vals = np.clip(raw, KC_MIN, KC_MAX)
-    dates = _map_steps_to_dates(last_date, KC_CADENCE_DAYS, steps)
-    return vals, dates
-
-
-def forecast_series_pet(steps: int) -> Tuple[np.ndarray, np.ndarray, List[datetime]]:
-    """Returns (pet_vals, peff_vals, dates)."""
-    obj       = load_model("pet")
-    res       = obj["model"]
-    last_date = obj["meta"]["last_date"]
-    rain_clim = obj.get("rain_clim", np.zeros(S_PET))
-
-    future_rain = _future_rain_exog(rain_clim, last_date, steps)
-    raw  = res.get_forecast(steps=steps,
-                            exog=future_rain).predicted_mean.values.astype(float)
-    pet  = np.clip(raw, PET_MIN, PET_MAX)
-
-    # FIX-E: effective rainfall for IWR
-    peff = np.clip(future_rain * RAIN_EFFECTIVE_FRACTION, 0.0, None)
-
-    dates = _map_steps_to_dates(last_date, PET_CADENCE_DAYS, steps)
-    return pet, peff, dates
-
-
-def _interpolate_to_daily(values: np.ndarray,
-                           dates: List[datetime],
-                           target_dates: List[datetime]) -> np.ndarray:
-    """Linear interpolation of sparse forecast onto specific target_dates."""
-    src_ord = np.array([d.toordinal() for d in dates], dtype=float)
-    tgt_ord = np.array([d.toordinal() for d in target_dates], dtype=float)
-    return np.interp(tgt_ord, src_ord, values,
-                     left=values[0], right=values[-1])
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
-def forecast_points(reference_date: datetime,
-                    horizons: List[int] = (0, 5, 10, 15)) -> pd.DataFrame:
-    """
-    Return Kc, SAVI, PET, CWR, IWR for each day horizon.
-    horizons=0 → today, horizons=5 → 5 days ahead, etc.
-    """
-    max_h = max(horizons) + 2
-
-    kc_steps  = max(max_h // KC_CADENCE_DAYS + 4, S_KC)
-    pet_steps = max(max_h + 10, S_PET)
-
-    kc_vals,            kc_dates  = forecast_series_kc(kc_steps)
-    pet_vals, peff_vals, pet_dates = forecast_series_pet(pet_steps)
-
-    rows = []
-    for h in horizons:
-        tgt = reference_date + timedelta(days=h)
-
-        kc_day   = float(_interpolate_to_daily(kc_vals,   kc_dates,  [tgt])[0])
-        pet_day  = float(_interpolate_to_daily(pet_vals,  pet_dates, [tgt])[0])
-        peff_day = float(_interpolate_to_daily(peff_vals, pet_dates, [tgt])[0])
-
-        kc_day  = float(np.clip(kc_day,  KC_MIN,  KC_MAX))
-        pet_day = float(np.clip(pet_day, PET_MIN, PET_MAX))
-
-        savi_day = float(np.clip((kc_day - KC_INTERCEPT) / KC_SLOPE,
-                                 SAVI_MIN, SAVI_MAX))
-
-        cwr = kc_day * pet_day                    # mm/day
-        iwr = max(cwr - peff_day, 0.0)            # FIX-E: subtract Peff
-
-        rows.append({
-            "horizon_days": h,
-            "date":  tgt.strftime("%Y-%m-%d"),
-            "savi":  round(savi_day, 4),
-            "kc":    round(kc_day,   4),
-            "pet":   round(pet_day,  4),
-            "peff":  round(peff_day, 4),
-            "cwr":   round(cwr,      4),
-            "iwr":   round(iwr,      4),
+        # Processed Kc/SAVI rasters are already wheat-masked in processor.py.
+        kc_val = raster_mean(kc_fp, mask_zeros=True, apply_crop_mask=False)
+        if np.isnan(kc_val):
+            continue
+        savi_val = float(kc_to_savi([kc_val])[0])
+        
+        doy = date.timetuple().tm_yday
+        s, c = _doy_sin_cos([doy])
+        angle2 = 4.0 * np.pi * doy / 365.0  # 2nd harmonic for seasonal capture
+        das = days_after_sowing(date)
+        
+        records.append({
+            "date": date, 
+            "kc": kc_val,
+            "savi": savi_val,
+            "das": float(das),
+            "das_norm": _das_norm(date),
+            "season_year": float(_season_start_year(date)),
+            "sin_doy": s[0], 
+            "cos_doy": c[0],
+            "sin2_doy": float(np.sin(angle2)),
+            "cos2_doy": float(np.cos(angle2)),
         })
-
-    return pd.DataFrame(rows).set_index("horizon_days")
-
-
-def compute_iwr_forecast(reference_date: datetime,
-                         days: int = 15) -> pd.DataFrame:
-    """
-    Daily IWR forecast for the next `days` Rabi days.
-    Compatible with existing main.py call signature.
-    """
-    kc_steps  = max(days // KC_CADENCE_DAYS + 4, S_KC)
-    pet_steps = max(days + 10, S_PET)
-
-    kc_vals,             kc_dates  = forecast_series_kc(kc_steps)
-    pet_vals, peff_vals, pet_dates = forecast_series_pet(pet_steps)
-
-    target_dates = [reference_date + timedelta(days=i + 1) for i in range(days)]
-    target_dates = [d for d in target_dates if is_rabi(d)]
-
-    kc_i   = _interpolate_to_daily(kc_vals,   kc_dates,  target_dates)
-    pet_i  = _interpolate_to_daily(pet_vals,  pet_dates, target_dates)
-    peff_i = _interpolate_to_daily(peff_vals, pet_dates, target_dates)
-
-    kc_i  = np.clip(kc_i,  KC_MIN,  KC_MAX)
-    pet_i = np.clip(pet_i, PET_MIN, PET_MAX)
-
-    savi_i = np.clip((kc_i - KC_INTERCEPT) / KC_SLOPE, SAVI_MIN, SAVI_MAX)
-    cwr_i  = kc_i * pet_i
-    iwr_i  = np.maximum(cwr_i - peff_i, 0.0)   # FIX-E
-
-    df = pd.DataFrame({
-        "savi": savi_i,
-        "kc":   kc_i,
-        "pet":  pet_i,
-        "peff": peff_i,
-        "cwr":  cwr_i,
-        "iwr":  iwr_i,
-    }, index=pd.DatetimeIndex(target_dates))
-
-    logger.info("IWR forecast: %d days from %s, mean IWR=%.3f mm/day",
-                len(df), reference_date.date(), iwr_i.mean())
+    
+    if not records:
+        raise RuntimeError("No valid Kc data found after filtering")
+    
+    df = pd.DataFrame(records).sort_values("date").set_index("date")
+    grouped = df.groupby("season_year", group_keys=False)
+    df["kc_smooth"] = grouped["kc"].transform(
+        lambda s: s.rolling(3, center=True, min_periods=1).mean()
+    )
+    df["savi_diff"] = grouped["savi"].diff().fillna(0.0)
+    df["savi_trend"] = grouped["savi"].transform(
+        lambda s: s.rolling(5, min_periods=1).mean()
+    )
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=["kc_smooth", "savi", "savi_diff", "das_norm"]
+    )
+    if df.empty:
+        raise RuntimeError("No valid Kc rows after feature engineering")
+    logger.info("Kc dataset: %d records (%s → %s)", 
+                len(df), df.index[0].date(), df.index[-1].date())
+    logger.info(
+        "Kc range: %.3f to %.3f | smoothed %.3f to %.3f",
+        df["kc"].min(),
+        df["kc"].max(),
+        df["kc_smooth"].min(),
+        df["kc_smooth"].max(),
+    )
     return df
 
 
-# ── Spatial mapping helpers ───────────────────────────────────────────────────
-def savi_to_kc(savi: np.ndarray) -> np.ndarray:
-    """Thesis regression for pixel-level mapping (spatial, not time-series)."""
-    return np.clip(KC_SLOPE * np.asarray(savi, float) + KC_INTERCEPT,
-                   KC_MIN, KC_MAX)
+def load_wheat_pet_dataset() -> pd.DataFrame:
+    """
+    Load PET time series from INSAT-3D rasters for SARIMA training.
+    
+    THESIS §4.2, §4.6:
+      - PET is derived from INSAT-3D using FAO-56 Penman-Monteith
+      - PET is purely meteorological — NO SAVI, NO Kc involvement
+      - SARIMA forecasts PET → PET (univariate with Fourier + month exog)
+    
+    Returns DataFrame with PET, log PET, Fourier seasonality, month, and lags.
+    """
+    logger.info("Loading PET dataset (INSAT-3D only)...")
+    pet_map = build_date_file_map(PET_DIR)
+    
+    if not pet_map:
+        raise RuntimeError("No PET rasters found in raw/insat_pet/")
+    
+    records = []
+    for date, pet_fp in sorted(pet_map.items()):
+        if not is_rabi(date):
+            continue
+        pet_val = raster_mean(pet_fp, mask_zeros=True)
+        if np.isnan(pet_val):
+            continue
+        
+        doy = date.timetuple().tm_yday
+        s1, c1 = _doy_sin_cos([doy])
+        angle2 = 4.0 * np.pi * doy / 365.0
+        
+        records.append({
+            "date": date, 
+            "pet": pet_val,
+            "season_year": float(_season_start_year(date)),
+            "sin_doy": s1[0], 
+            "cos_doy": c1[0],
+            "sin2_doy": float(np.sin(angle2)), 
+            "cos2_doy": float(np.cos(angle2)),
+            "month": float(date.month),
+        })
+    
+    df = pd.DataFrame(records).sort_values("date").set_index("date")
+    
+    # Lag/log features stabilize the MOSDAC PET signal without adding weather inputs.
+    df["pet_log"] = np.log1p(df["pet"])
+    grouped = df.groupby("season_year", group_keys=False)
+    df["pet_lag1"] = grouped["pet"].shift(1)
+    df["pet_lag2"] = grouped["pet"].shift(2)
+    df = df.dropna()
+    if df.empty:
+        raise RuntimeError("No valid PET rows after lag/log feature engineering")
+    
+    logger.info("PET dataset: %d records (%s → %s)", 
+                len(df), df.index[0].date(), df.index[-1].date())
+    logger.info("PET range: %.2f to %.2f mm/day", df["pet"].min(), df["pet"].max())
+    return df
 
 
-def kc_to_savi(kc: np.ndarray) -> np.ndarray:
-    """Inverse regression: Kc → SAVI."""
-    return np.clip((np.asarray(kc, float) - KC_INTERCEPT) / KC_SLOPE,
-                   SAVI_MIN, SAVI_MAX)
+# ═══════════════════════════════════════════════════════════════════════════
+# THESIS SARIMA trainer — Seasonal period = 12 (monthly)
+# ═══════════════════════════════════════════════════════════════════════════
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
-
-    print("=" * 64)
-    print("Training SARIMAX models …")
-    print("=" * 64)
-
-    metrics = train_all_models()
-
-    print("\n" + "=" * 64)
-    print(f"  Kc  R² = {metrics['kc']['R2']:+.4f}   "
-          f"RMSE = {metrics['kc']['RMSE']:.4f}   "
-          f"MAE = {metrics['kc']['MAE']:.4f}")
-    print(f"  PET R² = {metrics['pet']['R2']:+.4f}   "
-          f"RMSE = {metrics['pet']['RMSE']:.4f}   "
-          f"MAE = {metrics['pet']['MAE']:.4f}")
-    print("=" * 64)
-
-    today = datetime.now()
-    print(f"\nForecast from {today.date()} for horizons: today, +5, +10, +15")
+def _train_sarima(
+    y: pd.Series, 
+    exog: pd.DataFrame, 
+    target_name: str,
+    seasonal_period: int = 12,
+    inverse_transform=None,
+) -> Tuple:
+    """
+    THESIS §4.6, §5.6, Table 13: SARIMA(1,1,1)(1,1,1,12)
+    
+    The thesis uses monthly seasonality (period=12) within the Rabi season.
+    This captures the monthly progression: Nov→Dec→Jan→Feb→Mar→Apr.
+    
+    Model selection from thesis Table 13: SARIMA(1,1,1)(1,1,1,12)
+    """
+    SARIMA_ORDER = (1, 1, 1)
+    SARIMA_SEASONAL = (1, 1, 1, seasonal_period)
+    
+    logger.info("=" * 65)
+    logger.info("Training SARIMA%s%s for %s — feature-engineered v13.2", 
+                SARIMA_ORDER, SARIMA_SEASONAL, target_name)
+    logger.info("=" * 65)
+    
+    common_idx = y.index.intersection(exog.index)
+    y = y.loc[common_idx]
+    exog = exog.loc[common_idx]
+    mask = ~(exog.isnull().any(axis=1) | y.isnull())
+    y, exog = y[mask], exog[mask]
+    
+    logger.info("Total samples: %d", len(y))
+    logger.info("Date range: %s → %s", y.index[0].date(), y.index[-1].date())
+    logger.info("Exog: %s", list(exog.columns))
+    
+    # Train/test split: 80/20
+    split_idx = int(len(y) * 0.8)
+    if split_idx < 30:
+        raise ValueError(f"Too few samples: {len(y)}")
+    
+    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+    exog_train, exog_test = exog.iloc[:split_idx], exog.iloc[split_idx:]
+    
+    logger.info("Train: %d (%s → %s)", len(y_train),
+                y_train.index[0].date(), y_train.index[-1].date())
+    logger.info("Test:  %d (%s → %s)", len(y_test),
+                y_test.index[0].date(), y_test.index[-1].date())
+    
+    # Fit training split
+    logger.info("Fitting SARIMAX...")
     try:
-        fp = forecast_points(today, horizons=[0, 5, 10, 15])
-        print(fp.to_string())
-    except Exception as e:
-        print(f"  Forecast failed: {e}")
+        sarima_train = SARIMAX(
+            y_train, 
+            exog=exog_train,
+            order=SARIMA_ORDER,
+            seasonal_order=SARIMA_SEASONAL,
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        ).fit(disp=False, method="lbfgs", maxiter=500)
+    except Exception as exc:
+        logger.error("SARIMAX fit failed: %s", exc)
+        # Fallback to simpler model if convergence fails
+        logger.info("Retrying with SARIMA(1,1,1)(0,1,1,12)...")
+        sarima_train = SARIMAX(
+            y_train, 
+            exog=exog_train,
+            order=(1, 1, 1),
+            seasonal_order=(0, 1, 1, seasonal_period),
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        ).fit(disp=False, method="lbfgs", maxiter=500)
+    
+    logger.info("AIC=%.2f BIC=%.2f", sarima_train.aic, sarima_train.bic)
+    
+    # Validate
+    try:
+        fc = sarima_train.forecast(steps=len(y_test), exog=exog_test)
+        if inverse_transform is not None:
+            metrics = compute_validation_metrics(
+                inverse_transform(y_test.values),
+                inverse_transform(fc.values),
+            )
+        else:
+            metrics = compute_validation_metrics(y_test.values, fc.values)
+    except Exception as exc:
+        raise RuntimeError(f"Forecast failed: {exc}") from exc
+    
+    logger.info("Test  R²=%.4f RMSE=%.4f MAE=%.4f MAPE=%.2f%%",
+                metrics["R2"], metrics["RMSE"], metrics["MAE"], metrics["MAPE"])
+    
+    # Retrain on full dataset
+    logger.info("Retraining on full dataset (%d samples)...", len(y))
+    try:
+        final_model = SARIMAX(
+            y, 
+            exog=exog,
+            order=SARIMA_ORDER,
+            seasonal_order=SARIMA_SEASONAL,
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        ).fit(disp=False, method="lbfgs", maxiter=500)
+    except Exception as exc:
+        logger.error("Full refit failed: %s", exc)
+        final_model = SARIMAX(
+            y, 
+            exog=exog,
+            order=(1, 1, 1),
+            seasonal_order=(0, 1, 1, seasonal_period),
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        ).fit(disp=False, method="lbfgs", maxiter=500)
+    
+    logger.info("Full fit AIC=%.2f", final_model.aic)
+    return final_model, metrics, SARIMA_ORDER
 
-    print("\nDone.")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Kc SARIMA trainer — THESIS §4.6, §5.6
+# ═══════════════════════════════════════════════════════════════════════════
+
+def train_kc_model():
+    """
+    SARIMAX model for Kc forecasting using smoothed Kc plus crop-stage and
+    SAVI dynamics extracted from the existing Sentinel-2 series.
+    """
+    df = load_wheat_kc_dataset()
+    
+    exog_cols = [
+        "sin_doy",
+        "cos_doy",
+        "sin2_doy",
+        "cos2_doy",
+        "das_norm",
+        "savi",
+        "savi_diff",
+    ]
+    exog = df[exog_cols]
+    
+    model, metrics, order = _train_sarima(df["kc_smooth"], exog, "Kc", seasonal_period=12)
+    
+    meta = {
+        "model": model, 
+        "metrics": metrics, 
+        "exog_cols": exog_cols,
+        "order": order, 
+        "last_date": df.index[-1], 
+        "last_savi": float(df["savi"].iloc[-1]),
+        "last_kc": float(df["kc"].iloc[-1]),
+        "target_name": "kc",
+        "target_series": "kc_smooth",
+        "note": "SARIMAX(1,1,1)(1,1,1,12) for smoothed Kc using DAS, SAVI, and SAVI dynamics.",
+    }
+    with open(KC_MODEL_PATH, "wb") as f:
+        pickle.dump(meta, f)
+    logger.info("Kc model saved → %s (R²=%.4f)", KC_MODEL_PATH, metrics["R2"])
+    return model, metrics
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PET SARIMA trainer — THESIS §4.6, §5.6
+# ═══════════════════════════════════════════════════════════════════════════
+
+def train_pet_model():
+    """
+    THESIS §4.6, §5.6: SARIMA for PET — purely meteorological.
+    
+    CRITICAL CLARIFICATION:
+      - PET is derived from INSAT-3D using FAO-56 Penman-Monteith (§4.2)
+      - PET is NOT derived from SAVI or Kc — it's independent meteorological data
+      - SARIMA forecasts PET → PET (Fourier + month + PET lag exog)
+    
+    Input to SARIMA:  PET, historical from INSAT-3D
+    Output from SARIMA: PET (forecasted)
+    Exogenous: Fourier harmonics + month indicator + PET lag
+    """
+    df = load_wheat_pet_dataset()
+    
+    exog_cols = ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy", "month", "pet_lag1"]
+    exog = df[exog_cols]
+    
+    model, metrics, order = _train_sarima(df["pet"], exog, "PET", seasonal_period=12)
+    
+    meta = {
+        "model": model, 
+        "metrics": metrics, 
+        "exog_cols": exog_cols,
+        "order": order, 
+        "last_date": df.index[-1], 
+        "last_pet": float(df["pet"].iloc[-1]),
+        "target_name": "pet",
+        "pet_log_available": True,
+        "note": "SARIMAX(1,1,1)(1,1,1,12) for PET using Fourier, month, and PET lag. "
+                "log1p(PET) is engineered for diagnostics but raw PET validated better here.",
+    }
+    with open(PET_MODEL_PATH, "wb") as f:
+        pickle.dump(meta, f)
+    logger.info("PET model saved → %s (R²=%.4f)", PET_MODEL_PATH, metrics["R2"])
+    return model, metrics
+
+
+def train_all_models() -> dict:
+    logger.info("=" * 80)
+    logger.info("Training Models — v13.2 [FEATURE-ENGINEERED]")
+    logger.info("=" * 80)
+    results = {}
+    
+    for name, fn in [("kc", train_kc_model), ("pet", train_pet_model)]:
+        try:
+            model, metrics = fn()
+            results[name] = {"model": model, "metrics": metrics}
+        except Exception as exc:
+            logger.error("%s FAILED: %s", name.upper(), exc)
+            import traceback
+            traceback.print_exc()
+            results[name] = None
+            raise
+    
+    logger.info("\n" + "=" * 80)
+    logger.info("Training Summary — FEATURE ENGINEERED")
+    logger.info("=" * 80)
+    for name, result in results.items():
+        if result:
+            m = result["metrics"]
+            logger.info("%s:", name.upper())
+            for k in ("R2", "NSE", "RMSE", "MAE", "MAPE"):
+                v = m.get(k)
+                if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                    logger.info("  %-6s: %s", k, v)
+    return results
+
+
+def load_model(model_type: str):
+    path_map = {"kc": KC_MODEL_PATH, "pet": PET_MODEL_PATH}
+    path = path_map.get(model_type)
+    if not path or not path.exists():
+        raise FileNotFoundError(f"Model not found: {path}")
+    with open(path, "rb") as f:
+        meta = pickle.load(f)
+    logger.info("Loaded %s — %s (R²=%.4f)",
+                model_type.upper(), meta.get("note", ""), meta["metrics"]["R2"])
+    return meta["model"], meta
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Wheat growth-stage model — THESIS §4.3, Table 9
+# ═══════════════════════════════════════════════════════════════════════════
+
+WHEAT_SOWING_DOY: int = 319  # Nov 15
+
+WHEAT_STAGE_LENGTHS: Dict[str, int] = {
+    "initial": 30,      # Germination
+    "development": 40,  # Tillering → jointing
+    "mid_season": 50,   # Heading → flowering (peak water demand)
+    "late_season": 30   # Grain fill → maturity
+}
+
+def days_after_sowing(date: datetime, sow_doy: int = WHEAT_SOWING_DOY) -> int:
+    if sow_doy == WHEAT_SOWING_DOY:
+        return max(0, (date - _season_sowing_date(date)).days)
+
+    doy = date.timetuple().tm_yday
+    if doy >= sow_doy:
+        return doy - sow_doy
+    return (365 - sow_doy) + doy
+
+def get_wheat_stage_kc(date: datetime) -> Tuple[str, float]:
+    """
+    FAO-56 stage Kc for wheat (thesis §4.3, §5.3).
+    Used for blending with SAVI-derived Kc in forecast.
+    """
+    das = max(0, days_after_sowing(date))
+    kc_ini, kc_mid, kc_end = 0.30, 1.15, 0.40
+    L_ini, L_dev, L_mid, L_late = 30, 40, 50, 30
+    
+    if das <= L_ini:
+        return "initial", kc_ini
+    if das <= L_ini + L_dev:
+        t = (das - L_ini) / L_dev
+        return "development", round(kc_ini + t * (kc_mid - kc_ini), 4)
+    if das <= L_ini + L_dev + L_mid:
+        return "mid_season", kc_mid
+    if das <= L_ini + L_dev + L_mid + L_late:
+        t = (das - L_ini - L_dev - L_mid) / L_late
+        return "late_season", round(kc_mid + t * (kc_end - kc_mid), 4)
+    return "post_harvest", kc_end
+
+def get_wheat_stage_info(date: datetime) -> Dict:
+    das = days_after_sowing(date)
+    stage, kc_fao56 = get_wheat_stage_kc(date)
+    total = sum(WHEAT_STAGE_LENGTHS.values())
+    bounds = {
+        "initial": (0, 30, "Germination → emergence"),
+        "development": (30, 70, "Tillering → canopy closure"),
+        "mid_season": (70, 120, "Heading → flowering (peak ET)"),
+        "late_season": (120, 150, "Grain fill → maturity"),
+    }
+    start, end, desc = bounds.get(stage, (0, 150, "Outside season"))
+    return {
+        "stage": stage, 
+        "das": das, 
+        "kc_fao56": kc_fao56,
+        "kc_min": KC_MIN, 
+        "kc_max": KC_MAX,
+        "fraction_complete": round(min(max(0, das - start) / max(1, end - start), 1.0), 3),
+        "note": desc,
+        "season_progress": round(min(das / total, 1.0), 3),
+    }
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    results = train_all_models()

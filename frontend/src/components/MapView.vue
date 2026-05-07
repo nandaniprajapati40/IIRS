@@ -45,14 +45,7 @@
           {{ pointData.lat?.toFixed(5) }}°N,&nbsp;{{ pointData.lon?.toFixed(5) }}°E
         </span>
       </div>
-      <div class="meta-row weather-row" @click="weatherVisible = true">
-        <span class="meta-icon">🌤️</span>
-        <span class="meta-label">Weather</span>
-        <span class="meta-val weather-link">
-          <span class="weather-date-line">{{ props.weatherSummary?.dateLabel || 'Today' }}</span>
-          <span class="weather-location-line">{{ props.weatherSummary?.location || 'Selected Location' }}</span>
-        </span>
-      </div>
+      
 
       <!-- No active layer hint -->
       <p v-if="activeLayers.length === 0" class="nodata-hint">
@@ -81,7 +74,7 @@
             <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]"
                  :class="{ 'fc-item--active': selectedWindow === w[0] && layer.name === 'kc' }"
                  @click="layer.name === 'kc' && selectForecastWindow(w[0])">
-              <span class="fc-label">{{ w[1] }} avg</span>
+              <span class="fc-label">{{ w[1] }} ahead</span>
               <span v-if="layer.name === 'kc' && forecastData?.kc?.[w[0]] != null"
                     class="value"
                     :style="getValueStyle('kc', forecastData.kc[w[0]])">
@@ -99,7 +92,7 @@
           <!-- 5/10/15-day forecast — CWR / IWR -->
           <template v-if="forecastData && (layer.name === 'cwr' || layer.name === 'iwr')">
             <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]">
-              <span class="fc-label">{{ w[1] }} avg</span>
+              <span class="fc-label">{{ w[1] }} ahead</span>
               <span v-if="forecastData?.[layer.name]?.[w[0]] != null"
                     class="value"
                     :style="getValueStyle(layer.name, forecastData[layer.name][w[0]])">

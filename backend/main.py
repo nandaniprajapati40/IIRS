@@ -23,9 +23,12 @@ from config import (
 from logging_config import setup_logging
 import models
 from models import (
-    build_forecast_exog,   # shared exog builder for SARIMAX out-of-sample
-    raster_mean,           # spatial mean utility (fixes broken import in _climatological_peff)
-    savi_to_kc,            # physics: Kc = KC_SLOPE × SAVI + KC_INTERCEPT
+    build_forecast_exog,      # out-of-sample exog builder for SARIMAX/Ridge
+    set_forecast_context,     # injects last observed SAVI/Kc into exog builder
+    raster_mean,              # spatial mean utility
+    savi_to_kc,               # physics: Kc = KC_SLOPE × SAVI + KC_INTERCEPT
+    get_wheat_stage_info,
+    get_wheat_stage_kc,
     KC_SLOPE,
     KC_INTERCEPT,
     KC_MIN,
@@ -45,7 +48,7 @@ CWR_MAX      = 15.0
 # CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-HISTORY_DATES  = 12
+HISTORY_DATES  = 20   # ← increased from 12 for fuller calendar coverage
 FORECAST_DAYS  = 15
 NODATA         = -9999.0
 PARAMS         = ["savi", "kc", "cwr", "iwr"]
@@ -179,6 +182,39 @@ def _read_mean(path: Path) -> Optional[float]:
         return None
 
 
+def _processed_mean_for_date(param: str, date: datetime) -> Optional[float]:
+    """Read the processed raster mean for the requested parameter/date."""
+    src = _SRC.get(param)
+    if src is None:
+        return None
+
+    src_dir, pattern = src
+    date_key = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    for d, path in _dated_files(src_dir, pattern):
+        if d == date_key:
+            return _read_mean(path)
+    return None
+
+
+def _reference_mean(param: str, reference_date: datetime, fallback: Optional[float] = None) -> Optional[float]:
+    """
+    Forecasts may be generated for any history slot, not only "today".
+    Prefer the raster from the actual reference date, then the matching
+    exported history slot, then the supplied fallback.
+    """
+    value = _processed_mean_for_date(param, reference_date)
+    if value is not None:
+        return value
+
+    for idx, d in enumerate(_latest_n_complete_dates(HISTORY_DATES)):
+        if d.date() == reference_date.date():
+            value = _read_mean(history_path(param, slot_for_index(idx)))
+            if value is not None:
+                return value
+
+    return fallback
+
+
 def _load_slot_array(param: str, slot: str) -> Optional[np.ndarray]:
     """Load a history slot raster array (NaN for NODATA pixels)."""
     p = history_path(param, slot)
@@ -293,7 +329,7 @@ def _reproject_and_write(
         )
 
         dst[dst > vmax] = np.nan
-        if param in ("cwr", "iwr"):
+        if param == "cwr":
             dst[(~np.isnan(dst)) & (dst <= 0.0)] = np.nan
         dst[dst < vmin] = np.nan
         dst[~grid["mask_bool"]] = np.nan
@@ -419,191 +455,152 @@ def generate_history_rasters() -> int:
 # Only PET uses SARIMAX. Kc uses its own trained SARIMAx + DOY adjustment.
 
 # ═══════════════════════════════════════════════════════════════════════════
-def _project_kc_for_dates(
-    future_dates: pd.DatetimeIndex,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Forecast SAVI with SARIMAX, then derive Kc via thesis physics.
 
-    Returns (savi_forecast, kc_forecast).
+def _effective_rainfall_daily(rain_mm: float) -> float:
+    """Daily effective rainfall using the thesis/FAO monthly formula scaled to 1 day."""
+    rain_mm = max(float(rain_mm), 0.0)
+    period_factor = 1.0 / 30.0
+    threshold = 75.0 * period_factor
+    if rain_mm > threshold:
+        return max(0.0, 0.8 * rain_mm - 25.0 * period_factor)
+    return max(0.0, 0.6 * rain_mm - 10.0 * period_factor)
 
-    IMPROVEMENT over previous version:
-    ─────────────────────────────────
-    Previously: trained SARIMAX directly on Kc (a derived variable) → R²=0.11,
-    then used only 15% of that output anyway.
 
-    Now (primary path):
-        1. Forecast SAVI with SARIMAX  (raw satellite signal, cleaner signal)
-        2. Apply  Kc = KC_SLOPE × SAVI + KC_INTERCEPT  (thesis linear eq.)
-        3. Apply phenological decline at maturation only when obs slope
-           confirms it (no blind overrides).
-        4. Smooth the 1→15 day transition from last observation.
+def _rainfall_mean_for_date(date: datetime, rain_by_date: Dict[datetime, Path]) -> float:
+    """Return rainfall for the forecast date; missing future rain is treated as dry."""
+    date_key = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    rain_path = rain_by_date.get(date_key)
+    if rain_path is None:
+        return 0.0
 
-    Fallback (if SAVI model unavailable):
-        Same trend-based Kc method as before, but with 60% SARIMAX weight
-        instead of the previous 15%.
-    """
-    last_kc_obs   = _read_mean(history_path("kc",   "today")) or 0.80
-    last_savi_obs = _read_mean(history_path("savi", "today")) or (
-        (last_kc_obs - KC_INTERCEPT) / KC_SLOPE
-    )
-    savi_1d_ago = _read_mean(history_path("savi", "1")) or last_savi_obs
-
-    # ── Primary: SAVI SARIMAX → Kc via thesis physics ────────────────────────
-    savi_model, savi_meta = _get_model("savi")
-    if savi_model is not None:
-        try:
-            exog_cols = savi_meta.get("exog_cols", ["doy_sin", "doy_cos"])
-            savi_exog = build_forecast_exog(future_dates, exog_cols=exog_cols)
-            savi_fc   = savi_model.get_forecast(
-                steps=len(future_dates), exog=savi_exog
-            )
-            savi_base = np.clip(
-                savi_fc.predicted_mean.values.astype(float), -0.1, 0.9
-            )
-
-            # Phenological adjustment: late-season maturation (DOY ≥ 95 ≈ April 5)
-            # Only enforce decline if observation confirms it (avoids overriding
-            # a genuine flat or rising signal before senescence).
-            ref_doy = future_dates[0].dayofyear
-            if ref_doy >= 95:
-                obs_slope_savi = last_savi_obs - savi_1d_ago   # observed 1-day slope
-                maturation_slope = -0.015                       # ~−0.22 SAVI over 15 days
-                if obs_slope_savi > maturation_slope:
-                    slope_adj = 0.35 * obs_slope_savi + 0.65 * maturation_slope
-                else:
-                    slope_adj = obs_slope_savi
-                days_ahead  = np.arange(1, len(future_dates) + 1, dtype=float)
-                savi_trend  = last_savi_obs + slope_adj * days_ahead
-                savi_base   = 0.65 * savi_base + 0.35 * savi_trend
-                logger.info(
-                    f"SAVI forecast: maturity slope applied "
-                    f"(doy={ref_doy}, adj={slope_adj:.4f})"
-                )
-
-            savi_base = np.clip(savi_base, -0.1, 0.9)
-
-            # Smooth transition: anchor day-1 to last observation, relax over 7 days
-            alpha         = np.exp(-np.arange(len(future_dates)) / 7.0)
-            savi_forecast = alpha * float(last_savi_obs) + (1 - alpha) * savi_base
-
-            # Physics: Kc from SAVI
-            kc_from_savi = savi_to_kc(savi_forecast)
-
-            logger.info(
-                f"Kc forecast via SAVI→Kc chain: "
-                f"SAVI_mean={savi_forecast.mean():.3f}, "
-                f"Kc_mean={kc_from_savi.mean():.3f}, "
-                f"range={kc_from_savi.min():.3f}–{kc_from_savi.max():.3f}"
-            )
-            return savi_forecast, kc_from_savi
-
-        except Exception as exc:
-            logger.warning(f"SAVI→Kc chain failed ({exc}) — using Kc fallback")
-
-    # ── Fallback: Kc SARIMAX + phenological trend ────────────────────────────
-    # FIX: increased SARIMAX weight from 0.15 → 0.60 (model was virtually ignored)
-    kc_model, kc_meta = _get_model("kc")
-    kc_1d_ago  = _read_mean(history_path("kc", "1")) or last_kc_obs
-    kc_3d_ago  = _read_mean(history_path("kc", "3")) or kc_1d_ago
-
-    if kc_model is None:
-        base = np.full(len(future_dates), float(last_kc_obs))
-    else:
-        try:
-            exog_cols = kc_meta.get("exog_cols", ["doy_sin", "doy_cos"])
-            kc_exog   = build_forecast_exog(future_dates, exog_cols=exog_cols)
-            kc_fc     = kc_model.get_forecast(steps=len(future_dates), exog=kc_exog)
-            base      = kc_fc.predicted_mean.values.astype(float)
-        except Exception as e:
-            logger.warning(f"Kc SARIMAX failed: {e}")
-            base = np.full(len(future_dates), float(last_kc_obs))
-
-    days_ahead    = np.arange(1, len(future_dates) + 1, dtype=float)
-    recent_slope  = 0.6 * (last_kc_obs - kc_1d_ago) + 0.4 * (last_kc_obs - kc_3d_ago) / 3.0
-    ref_doy       = future_dates[0].dayofyear
-
-    if ref_doy >= 95:
-        maturation_slope = -0.022
-        if recent_slope > maturation_slope:
-            recent_slope = 0.3 * recent_slope + 0.7 * maturation_slope
-            logger.info(f"Kc fallback: maturity decline applied (doy={ref_doy})")
-
-    trend    = last_kc_obs + 0.85 * recent_slope * days_ahead
-    seasonal = (
-        0.15 * np.sin(2 * np.pi * future_dates.dayofyear.values / 365.25) +
-        0.08 * np.cos(2 * np.pi * future_dates.dayofyear.values / 365.25)
-    )
-
-    # FIX: 60% SARIMAX weight (was 15%)
-    kc_final = np.clip(0.60 * base + 0.35 * trend + seasonal, KC_MIN, KC_MAX)
-
-    # Return an estimated SAVI via inverse physics for consistency
-    savi_est = np.clip((kc_final - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
-    logger.info(
-        f"Kc fallback: last={last_kc_obs:.3f}, "
-        f"trend_mean={trend.mean():.3f}, range={kc_final.min():.3f}–{kc_final.max():.3f}"
-    )
-    return savi_est, kc_final
+    rain_val = raster_mean(rain_path, mask_zeros=False)
+    return float(rain_val) if np.isfinite(rain_val) and rain_val >= 0 else 0.0
 
 
 def _climatological_peff(future_dates: pd.DatetimeIndex) -> np.ndarray:
-    """Estimate effective rainfall from the last 7 days of rain rasters.
+    """Estimate daily effective rainfall for each forecast date.
 
-    FIXES:
-    1. `raster_mean` is now imported at module level (was a failed local import).
-    2. Full USDA-SCS formula applied to the 5-day total (not divided by days).
-    3. Removed pseudo-random noise: noise ≠ physical Peff; it was adding ~0.25
-       mm/day of fake rainfall that inflated IWR uncertainty.
-
-    For Rabi wheat (Nov–Apr) in Haryana/Uttarakhand, mean seasonal rainfall is
-    low (< 5 mm/day most days), so Peff is near zero most of the forecast window.
-    This is physically correct per Thesis §5.5.
+    Earlier code reused the latest rain rasters on disk for every reference
+    date. That made historical stage forecasts subtract the same Peff and often
+    flattened IWR to zero. The thesis chain is date based: IWR = CWR - Peff for
+    the forecast period, so rainfall must come from the matching forecast dates.
     """
     rain_dir = DIRECTORIES["raw"].get("insat_rain")
-    peff_scalar = 0.0
+    rain_by_date: Dict[datetime, Path] = {}
 
     if rain_dir and Path(rain_dir).exists():
-        rain_files = sorted(Path(rain_dir).glob("*.tif"))[-7:]
-        if rain_files:
+        for rain_path in Path(rain_dir).glob("*.tif"):
             try:
-                # raster_mean is now imported at module level — no local import needed
-                recent_vals = [
-                    raster_mean(f, mask_zeros=False)
-                    for f in rain_files if f.exists()
-                ]
-                recent_vals = [v for v in recent_vals if np.isfinite(v) and v >= 0]
+                rain_date = models.extract_date(rain_path.name)
+                rain_by_date[rain_date.replace(hour=0, minute=0, second=0, microsecond=0)] = rain_path
+            except Exception:
+                continue
 
-                if recent_vals:
-                    # USDA-SCS effective rainfall formula:
-                    #   For P_total (mm over N days):
-                    #     Peff = 0.70 × P_total − 5.0  (for P_total > 7.1 mm)
-                    #     Peff = 0.82 × P_total − 0.91 (for P_total ≤ 7.1 mm)
-                    #   Then convert to daily average.
-                    p_total  = float(sum(recent_vals))
-                    n_days   = max(len(recent_vals), 1)
-                    if p_total > 7.1:
-                        peff_total = max(0.0, 0.70 * p_total - 5.0)
-                    else:
-                        peff_total = max(0.0, 0.82 * p_total - 0.91)
-                    peff_scalar = peff_total / n_days
-            except Exception as exc:
-                logger.debug(f"Peff calculation error: {exc}")
+    peff_vals = np.array([
+        _effective_rainfall_daily(
+            _rainfall_mean_for_date(
+                d.to_pydatetime() if hasattr(d, "to_pydatetime") else d,
+                rain_by_date,
+            )
+        )
+        for d in future_dates
+    ], dtype=float)
 
-    logger.info(f"[forecast] Peff ≈ {peff_scalar:.3f} mm/day (USDA-SCS, last 7-day rain)")
-
-    # Return constant daily Peff for the forecast window.
-    # A constant is more honest than fake random spikes when we have no
-    # actual forecast rainfall data.
-    return np.full(len(future_dates), peff_scalar, dtype=float)
+    logger.info(
+        f"[forecast] Peff mean={peff_vals.mean():.3f} mm/day "
+        f"range={peff_vals.min():.3f}–{peff_vals.max():.3f} "
+        "(date-matched rain; FAO monthly formula scaled to daily)"
+    )
+    return peff_vals
 
 
+def _project_kc_for_dates(
+    future_dates: pd.DatetimeIndex,
+    reference_date: Optional[datetime] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    THESIS-COMPLIANT Kc forecasting.
+    
+    Strategy (v13.0 — thesis §4.6, §5.6):
+        1. Use trained SARIMA Kc model for Kc forecast.
+        2. If model unavailable, use FAO-56 stage Kc as fallback.
+        3. SAVI is NOT used to forecast Kc — Kc has its own SARIMA.
+    
+    Returns (savi_forecast, kc_forecast) — both shape (len(future_dates),).
+    """
+    # ── Load trained Kc SARIMA model ──────────────────────────────────────
+    kc_model, kc_meta = _get_model("kc")
+    
+    anchor_date = reference_date or (future_dates[0].to_pydatetime() - timedelta(days=1))
+    last_kc_obs = _reference_mean("kc", anchor_date, 0.80) or 0.80
+    last_savi_obs = _reference_mean("savi", anchor_date, None) or (
+        (last_kc_obs - KC_INTERCEPT) / KC_SLOPE
+    )
+    set_forecast_context(last_savi=last_savi_obs, last_kc=last_kc_obs)
+    
+    days_ahead = np.arange(1, len(future_dates) + 1, dtype=float)
+    
+    if kc_model is not None:
+        # ── Use trained SARIMA Kc model ───────────────────────────────
+        logger.info("Using trained SARIMA Kc model for forecast")
+        exog_cols = kc_meta.get("exog_cols", ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy"])
+        exog_df = build_forecast_exog(future_dates=future_dates, exog_cols=exog_cols)
+        
+        if hasattr(kc_model, "get_forecast"):
+            kc_fc = kc_model.get_forecast(steps=len(future_dates), exog=exog_df)
+            kc_forecast = kc_fc.predicted_mean.values.astype(float)
+        else:
+            kc_forecast = kc_model.forecast(steps=len(future_dates), exog=exog_df).values.astype(float)
+        
+        stage_kc = np.array([
+            get_wheat_stage_kc(d.to_pydatetime())[1]
+            for d in future_dates
+        ], dtype=float)
+        kc_forecast = 0.65 * kc_forecast + 0.35 * stage_kc
 
+        # Smooth first few days to the selected reference-date observation.
+        alpha = np.exp(-days_ahead / 5.0)
+        kc_forecast = alpha * float(last_kc_obs) + (1 - alpha) * kc_forecast
+        
+    else:
+        # ── Fallback: FAO-56 stage Kc ──────────────────────────────────
+        logger.warning("No Kc SARIMA model — using FAO-56 stage Kc")
+        kc_forecast = np.array([
+            get_wheat_stage_kc(d.to_pydatetime())[1]
+            for d in future_dates
+        ], dtype=float)
+    
+    kc_forecast = np.clip(kc_forecast, KC_MIN, KC_MAX)
+    
+    # ── Derive SAVI from Kc (inverse of thesis equation) ──────────────
+    # Kc = 1.2088 * SAVI + 0.5375  →  SAVI = (Kc - 0.5375) / 1.2088
+    savi_forecast = np.clip((kc_forecast - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
+    
+    # Log crop stage context
+    first_stage, first_kc_fao = get_wheat_stage_kc(future_dates[0].to_pydatetime())
+    logger.info(
+        f"Kc forecast [SARIMA/FAO-56]: "
+        f"Kc_mean={kc_forecast.mean():.3f}, "
+        f"range={kc_forecast.min():.3f}–{kc_forecast.max():.3f} "
+        f"| crop_stage={first_stage} (FAO-56 Kc={first_kc_fao:.3f})"
+    )
+    return savi_forecast, kc_forecast
 
 def generate_forecast_for_date(
     reference_date: datetime,
     days: int = FORECAST_DAYS,
 ) -> Dict[str, pd.Series]:
-    """Fixed forecasting pipeline (only PET uses SARIMAX)"""
+    """
+    THESIS-COMPLIANT forecasting pipeline (v13.0).
+    
+    THESIS §4.6, §5.6 chain:
+      1. Forecast Kc with SARIMA(1,1,1)(1,1,1,12) 
+      2. Forecast PET with SARIMA(1,1,1)(1,1,1,12) [NO SAVI input]
+      3. CWR = Kc × PET  (FAO-56 Eq. 4)
+      4. IWR = max(CWR − Peff, 0)  (FAO-56 §4.5)
+    
+    CRITICAL: NO SAVI in PET model. PET is meteorological.
+    """
     forecasts: Dict[str, pd.Series] = {}
 
     future_dates = pd.date_range(
@@ -612,80 +609,111 @@ def generate_forecast_for_date(
         freq="D",
     )
 
-    # ── 1. Forecast PET with SARIMAX ─────────────────────────────────────
-    pet_model, pet_meta = _get_model("pet")
+    # ── 1. Forecast Kc with trained SARIMA ──────────────────────────────
+    kc_model, kc_meta = _get_model("kc")
+    if kc_model is None:
+        raise RuntimeError(
+            "[forecast] Kc model not available. Run models.train_all_models()."
+        )
     
-    # Safely estimate last PET from CWR and Kc (since PET isn't in PARAMS history)
-    last_kc_obs  = _read_mean(history_path("kc", "today")) or 0.85
-    last_cwr_obs = _read_mean(history_path("cwr", "today")) or 3.5
-    last_pet_obs = last_cwr_obs / last_kc_obs if last_kc_obs > 0 else 4.0
-
-    doy = future_dates.dayofyear.values.astype(float)
-    # Seasonal Climatology: Low in Jan (~2.5), peaking in May/June (>8.0).
-    # Thesis §5.4: PET rises from ~3.0 in Jan to peaks of 7.0+ in April.
-    seasonal_pet = 5.5 + 3.2 * np.sin(2 * np.pi * (doy - 45) / 365.25)
-
-    # Smooth transition anchor: decays over 5 days
-    alpha = np.exp(-np.arange(days) / 5.0)
-
-    if pet_model is None:
-        logger.warning("[forecast] PET model unavailable → using seasonal trend")
-        pet_values = alpha * float(last_pet_obs) + (1 - alpha) * seasonal_pet
-        pet_values = np.clip(pet_values, 1.5, 12.0)
-        forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
+    last_kc_obs = _reference_mean("kc", reference_date, kc_meta.get("last_kc", 0.80)) or 0.80
+    last_savi_obs = _reference_mean("savi", reference_date, None) or kc_meta.get(
+        "last_savi",
+        (last_kc_obs - KC_INTERCEPT) / KC_SLOPE,
+    )
+    set_forecast_context(last_savi=last_savi_obs, last_kc=last_kc_obs)
+    
+    exog_cols_kc = kc_meta.get("exog_cols", ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy"])
+    exog_kc = build_forecast_exog(future_dates=future_dates, exog_cols=exog_cols_kc)
+    
+    if hasattr(kc_model, "get_forecast"):
+        kc_fc = kc_model.get_forecast(steps=days, exog=exog_kc)
+        kc_values = kc_fc.predicted_mean.values.astype(float)
     else:
-        try:
-            exog_cols = pet_meta.get("exog_cols", ["doy_sin", "doy_cos"])
-            exog_df = build_forecast_exog(
-                future_dates=future_dates,
-                exog_cols=exog_cols,
-            )
+        kc_values = kc_model.forecast(steps=days, exog=exog_kc).values.astype(float)
 
-            pet_fc   = pet_model.get_forecast(steps=days, exog=exog_df if not exog_df.empty else None)
-            base_pet = pet_fc.predicted_mean.values.astype(float)
+    stage_kc = np.array([
+        get_wheat_stage_kc(d.to_pydatetime())[1]
+        for d in future_dates
+    ], dtype=float)
+    kc_values = 0.65 * kc_values + 0.35 * stage_kc
+    
+    # Smooth to the selected reference-date crop state for the first few days.
+    alpha_kc = np.exp(-np.arange(1, days + 1, dtype=float) / 5.0)
+    kc_values = alpha_kc * float(last_kc_obs) + (1 - alpha_kc) * kc_values
+    kc_values = np.clip(kc_values, KC_MIN, KC_MAX)
+    
+    forecasts["kc"] = pd.Series(kc_values, index=future_dates, name="kc")
 
-            # FIX: was 0.2 SARIMAX + 0.8 seasonal → model was basically ignored.
-            # Now 0.65 SARIMAX + 0.35 seasonal. The SARIMAX carries the actual
-            # learned pattern; seasonal is a soft regularizer for long-range days.
-            pet_values = 0.65 * base_pet + 0.35 * seasonal_pet
+    # ── 2. Forecast PET with trained SARIMA — NO SAVI ─────────────────
+    pet_model, pet_meta = _get_model("pet")
+    if pet_model is None:
+        raise RuntimeError(
+            "[forecast] PET model not available. Run models.train_all_models()."
+        )
+    
+    # Estimate last PET from CWR/Kc
+    last_cwr_obs = _reference_mean("cwr", reference_date, 3.5) or 3.5
+    last_pet_obs = pet_meta.get("last_pet")
+    if last_pet_obs is None or not np.isfinite(last_pet_obs):
+        last_pet_obs = last_cwr_obs / last_kc_obs if last_kc_obs > 0 else 4.0
 
-            # Smooth first few days to last observation (removes jumps at t=1)
-            pet_values = alpha * float(last_pet_obs) + (1 - alpha) * pet_values
-            pet_values = np.clip(pet_values, 1.5, 12.0)
+    # PET may include lag exog; seed it from the selected reference-date context.
+    set_forecast_context(
+        last_savi=last_savi_obs,
+        last_kc=last_kc_obs,
+        last_pet=float(last_pet_obs),
+    )
+    exog_cols_pet = pet_meta.get("exog_cols", ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy", "month"])
+    exog_pet = build_forecast_exog(future_dates=future_dates, exog_cols=exog_cols_pet)
+    
+    if hasattr(pet_model, "get_forecast"):
+        pet_fc = pet_model.get_forecast(steps=days, exog=exog_pet)
+        base_pet = pet_fc.predicted_mean.values.astype(float)
+    else:
+        base_pet = pet_model.forecast(steps=days, exog=exog_pet).values.astype(float)
+    if pet_meta.get("target_transform") == "log1p":
+        base_pet = np.expm1(base_pet)
+    
+    # Mild seasonal regulariser (keeps long-range realistic)
+    doy = future_dates.dayofyear.values.astype(float)
+    seasonal_pet = 5.5 + 3.2 * np.sin(2 * np.pi * (doy - 45) / 365.25)
+    pet_values = 0.65 * base_pet + 0.35 * seasonal_pet
+    
+    # Smooth first few days
+    alpha_pet = np.exp(-np.arange(days) / 5.0)
+    pet_values = alpha_pet * float(last_pet_obs) + (1 - alpha_pet) * pet_values
+    pet_values = np.clip(pet_values, 1.5, 12.0)
+    
+    forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
 
-            forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
-
-        except Exception as e:
-            logger.warning(f"[forecast] PET SARIMAX failed: {e} → seasonal fallback")
-            pet_values = alpha * float(last_pet_obs) + (1 - alpha) * seasonal_pet
-            pet_values = np.clip(pet_values, 1.5, 12.0)
-            forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
-
-    # ── 2. Forecast SAVI + derive Kc via physics ─────────────────────────────
-    # FIX: _project_kc_for_dates now returns (savi_arr, kc_arr).
-    # SAVI is forecasted via SARIMAX; Kc = KC_SLOPE × SAVI + KC_INTERCEPT.
-    savi_projected, kc_projected = _project_kc_for_dates(future_dates)
-    forecasts["savi"] = pd.Series(savi_projected, index=future_dates, name="savi")
-    forecasts["kc"]   = pd.Series(kc_projected,   index=future_dates, name="kc")
-
-    # ── 3. Physics: CWR = Kc × PET ───────────────────────────────────────
-    cwr_arr = np.clip(kc_projected * forecasts["pet"].values, CWR_MIN, CWR_MAX)
+    # ── 3. Physics: CWR = Kc × PET ────────────────────────────────────
+    cwr_arr = np.clip(kc_values * pet_values, CWR_MIN, CWR_MAX)
     forecasts["cwr"] = pd.Series(cwr_arr, index=future_dates, name="cwr")
 
-    # ── 4. Physics: IWR = max(CWR - Peff, 0) ─────────────────────────────
+    # ── 4. Physics: IWR = max(CWR − Peff, 0) ─────────────────────────
     peff_arr = _climatological_peff(future_dates)
     iwr_arr = np.maximum(cwr_arr - peff_arr, 0.0)
     forecasts["iwr"] = pd.Series(iwr_arr, index=future_dates, name="iwr")
+    forecasts["peff"] = pd.Series(peff_arr, index=future_dates, name="peff")
+    
+    # ── Derive SAVI from Kc for dashboard consistency ─────────────────
+    savi_arr = np.clip((kc_values - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
+    forecasts["savi"] = pd.Series(savi_arr, index=future_dates, name="savi")
 
-    logger.info(f"[forecast] Generated for {reference_date.date()}: "
-                f"SAVI_mean={forecasts['savi'].mean():.3f}, "
-                f"PET_mean={forecasts['pet'].mean():.2f}, "
-                f"Kc_mean={forecasts['kc'].mean():.3f}, "
-                f"CWR_mean={forecasts['cwr'].mean():.2f}, "
-                f"IWR_mean={forecasts['iwr'].mean():.2f}")
+    # ── Crop-stage summary log ────────────────────────────────────────
+    stage_info = get_wheat_stage_info(future_dates[0].to_pydatetime())
+    logger.info(
+        f"[forecast] Generated for {reference_date.date()}: "
+        f"stage={stage_info['stage']} (DAS={stage_info['das']}, "
+        f"FAO-56 Kc={stage_info['kc_fao56']:.3f}) | "
+        f"Kc_mean={forecasts['kc'].mean():.3f}, "
+        f"PET_mean={forecasts['pet'].mean():.2f}, "
+        f"CWR_mean={forecasts['cwr'].mean():.2f}, "
+        f"IWR_mean={forecasts['iwr'].mean():.2f}"
+    )
 
     return forecasts
-
 
 def create_forecast_raster(
     param: str,
@@ -715,6 +743,7 @@ def create_forecast_raster(
             start_idx, end_idx = WINDOW_SLICES[window]
             window_forecast = forecast_series.iloc[start_idx:end_idx]
             forecast_mean = float(window_forecast.mean())
+            stage_info = get_wheat_stage_info(window_forecast.index[0].to_pydatetime())
 
         valid = ~np.isnan(template_data)
         if not valid.any():
@@ -752,6 +781,9 @@ def create_forecast_raster(
                 reference_date=slot,
                 forecast_mean=str(round(forecast_mean, 4)),
                 template_mean=str(round(template_mean, 4)),
+                crop_stage=stage_info["stage"],
+                days_after_sowing=str(stage_info["das"]),
+                kc_fao56=str(round(stage_info["kc_fao56"], 4)),
                 units="mm_per_day" if param in ["cwr", "iwr"] else "",
                 model="PET-SARIMAX+Physics-CWR/IWR",
                 generated_by="irrigation_monitoring_v9.0",
@@ -797,14 +829,6 @@ def generate_all_forecast_rasters() -> int:
 
                 # FORCED REGENERATION: Logic changes in main.py must be reflected immediately.
                 # Removing the skip check to ensure fresh forecasts whenever the pipeline runs.
-                template = history_path(param, slot)
-                if template.exists():
-                    if create_forecast_raster(
-                        param, slot, window, forecasts[param], template
-                    ):
-                        n_rasters += 1
-                        total += 1
-
                 template = history_path(param, slot)
                 if template.exists():
                     if create_forecast_raster(
@@ -1195,36 +1219,53 @@ async def get_forecast(
         "forecasts":      {},
     }
 
-    for param in ("savi", "pet", "kc", "cwr", "iwr"):
+    units_by_param = {
+        "savi": "unitless",
+        "kc": "unitless",
+        "pet": "mm_per_day",
+        "cwr": "mm_per_day",
+        "iwr": "mm_per_day",
+        "peff": "mm_per_day",
+    }
+
+    for param in ("savi", "pet", "kc", "cwr", "iwr", "peff"):
         if param in forecasts:
             series = forecasts[param]
             result["forecasts"][param] = {
                 "dates":  [d.strftime("%Y-%m-%d") for d in series.index],
                 "values": [round(float(v), 4) for v in series.values],
-                "units":  "mm_per_day",
+                "units":  units_by_param[param],
                 "mean":   round(float(series.mean()), 4),
                 "min":    round(float(series.min()),  4),
                 "max":    round(float(series.max()),  4),
             }
 
+    result["crop_stages"] = [
+        {
+            "date": d.strftime("%Y-%m-%d"),
+            **get_wheat_stage_info(d.to_pydatetime()),
+        }
+        for d in forecasts["kc"].index
+    ]
+
     result["window_summaries"] = {}
     WINDOW_SLICES = {
-    "5day": (0, 5),   # days 1-5
-    "10day": (0, 10), # days 1-10 (Cumulative)
-    "15day": (0, 15), # days 1-15 (Cumulative)
-}
-
-
+        "5day": (0, 5),    # days 1-5
+        "10day": (0, 10),  # days 1-10 (cumulative)
+        "15day": (0, 15),  # days 1-15 (cumulative)
+    }
 
     for window, (start_idx, end_idx) in WINDOW_SLICES.items():
         result["window_summaries"][window] = {}
-        for param in ("kc", "cwr", "iwr"):
+        for param in ("kc", "cwr", "iwr", "peff"):
             if param in forecasts:
                 vals = forecasts[param].iloc[start_idx:end_idx].values
                 result["window_summaries"][window][param] = {
                     "mean": round(float(np.mean(vals)), 4),
                     "total": round(float(np.sum(vals)), 4),
                 }
+        window_date = forecasts["kc"].index[start_idx].to_pydatetime()
+        result["window_summaries"][window]["crop_stage"] = get_wheat_stage_info(window_date)
 
     return result
 
@@ -1326,6 +1367,66 @@ def get_point(
         "forecast":         forecast,
     }
 
+# @app.get("/api/point")
+# def get_point(
+#     lat: float,
+#     lon: float,
+#     slot: Optional[str] = None,
+# ):
+#     if not slot:
+#         slot = "today"
+
+#     result = {}
+#     forecast = {}
+#     forecast_daily = {}
+
+#     # observed values
+#     for param in ("savi", "kc", "cwr", "iwr"):
+#         path = history_path(param, slot)
+
+#         if path.exists():
+#             with rasterio.open(path) as src:
+#                 val = list(src.sample([(lon, lat)]))[0][0]
+#                 result[param] = None if val == NODATA else float(val)
+
+#     # old forecast window values (keep UI safe)
+#     for param in ("kc", "cwr", "iwr"):
+#         forecast[param] = {}
+
+#         for w in FORECAST_WINDOWS:
+#             fpath = forecast_path(param, slot, w)
+
+#             if fpath.exists():
+#                 with rasterio.open(fpath) as src:
+#                     val = list(src.sample([(lon, lat)]))[0][0]
+#                     forecast[param][w] = None if val == NODATA else float(val)
+#             else:
+#                 forecast[param][w] = None
+
+#     # NEW DAILY FORECAST
+#     dates = _latest_n_complete_dates(1)
+#     ref_date = dates[0] if dates else datetime.today()
+
+#     fc = generate_forecast_for_date(ref_date, 15)
+
+#     forecast_daily["dates"] = [
+#         d.strftime("%Y-%m-%d") for d in fc["kc"].index
+#     ]
+
+#     for param in ("kc", "cwr", "iwr"):
+#         forecast_daily[param] = [
+#             round(float(v), 4)
+#             for v in fc[param].values
+#         ]
+
+#     return {
+#         "lat": lat,
+#         "lon": lon,
+#         "acquisition_date": slot,
+#         "values": result,
+#         "forecast": forecast,
+#         "forecast_daily": forecast_daily
+#     }
 
 @app.post("/api/refresh")
 async def manual_refresh():
@@ -1338,10 +1439,9 @@ async def manual_refresh():
 
 @app.get("/api/model/info")
 async def model_info():
-    """Return metadata for all loaded models."""
-    pet_model, pet_meta   = _get_model("pet")
-    kc_model,  kc_meta    = _get_model("kc")
-    savi_model, savi_meta = _get_model("savi")
+    """Return metadata for all loaded models — THESIS COMPLIANT."""
+    pet_model, pet_meta = _get_model("pet")
+    kc_model, kc_meta = _get_model("kc")
 
     def _meta_dict(model, meta):
         if meta is None:
@@ -1362,25 +1462,26 @@ async def model_info():
 
     return {
         "models": {
-            "savi": _meta_dict(savi_model, savi_meta),
-            "pet":  _meta_dict(pet_model,  pet_meta),
-            "kc":   _meta_dict(kc_model,   kc_meta),
+            "kc":  _meta_dict(kc_model,  kc_meta),
+            "pet": _meta_dict(pet_model, pet_meta),
         },
         "forecast_chain": {
-            "step1": "SAVI forecasted with SARIMAX (raw satellite signal)",
-            "step2": f"Kc derived from SAVI: Kc = {KC_SLOPE}×SAVI + {KC_INTERCEPT}  (thesis Eq.)",
-            "step3": "PET forecasted with SARIMAX (65% model, 35% seasonal)",
-            "step4": "CWR = Kc × PET  (FAO-56 Eq. 4)",
-            "step5": "IWR = max(CWR − Peff, 0)  (FAO-56 §4.5, USDA-SCS Peff)",
+            "step1": "Kc forecast: SARIMA(1,1,1)(1,1,1,12) on Kc time series",
+            "step2": "PET forecast: SARIMA(1,1,1)(1,1,1,12) — NO SAVI (purely meteorological)",
+            "step3": "CWR = Kc × PET  (FAO-56 Eq. 4)",
+            "step4": "IWR = max(CWR − Peff, 0)  (FAO-56 §4.5)",
         },
         "physical_relationships": {
-            "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}  (thesis linear regression)",
-            "cwr":        "CWR = Kc × PET  (computed)",
-            "iwr":        "IWR = max(CWR − Peff, 0)  (computed)",
-            "peff":       "USDA-SCS on 7-day interval rainfall total",
+            "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}  (thesis Table 9)",
+            "kc_to_savi": f"SAVI = (Kc − {KC_INTERCEPT:.4f}) / {KC_SLOPE:.4f}  (inverse)",
+            "cwr":        "CWR = Kc × PET  (FAO-56)",
+            "iwr":        "IWR = max(CWR − Peff, 0)  (FAO-56)",
+            "peff":       "Peff from INSAT rainfall via FAO-56 formula",
         },
+        "crop_stage_today": get_wheat_stage_info(datetime.utcnow()),
+        "history_slots": HISTORY_DATES,
+        "thesis_reference": "Satabdi Mandal, 2025, IIRS-ISRO, §4.6, §5.6",
     }
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT
@@ -1389,8 +1490,9 @@ async def model_info():
 def main():
     setup_logging()
     logger.info("=" * 65)
-    logger.info("Irrigation Monitoring System v9.0 starting …")
-    logger.info("Forecast: PET(SARIMAX) → CWR=Kc×PET → IWR=max(CWR-Peff,0)")
+    logger.info("Irrigation Monitoring System v10.0 starting …")
+    logger.info("Forecast: PET(SARIMAX trained) → CWR=Kc×PET → IWR=max(CWR-Peff,0)")
+    logger.info("Stage-aware Kc: SAVI-physics (day-weighted) + FAO-56 crop stage blend")
     logger.info("=" * 65)
 
     _get_wheat_mask()
@@ -1401,14 +1503,10 @@ def main():
     else:
         logger.error("✗ Failed to initialise PET model")
 
-    savi_model, savi_meta = _get_model("savi")
-    if savi_model:
-        logger.info(
-            f"✓ SAVI model ready (R²={savi_meta['metrics']['R2']:.4f}) "
-            f"→ Kc via Kc={KC_SLOPE}×SAVI+{KC_INTERCEPT}"
-        )
-    else:
-        logger.warning("⚠ SAVI model not available — Kc fallback will be used")
+    logger.info(
+        f"SAVI→Kc chain: Kc = {KC_SLOPE}×SAVI + {KC_INTERCEPT} "
+        f"(no SAVI SARIMAX — using trend+climatology blend)"
+    )
 
     run_pipeline()
 

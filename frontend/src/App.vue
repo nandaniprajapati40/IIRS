@@ -41,7 +41,7 @@
           <button class="weather-card" @click="toggleWeather">
             <span class="wc-icon">{{ selectedWeatherEntry ? getWeatherEmoji(selectedWeatherEntry.weathercode) : '🌤️' }}</span>
             <div class="wc-center">
-              <span class="wc-location">📍 {{ userLocationName }}</span>
+              <span class="wc-location"> {{ userLocationName }}</span>
               <span class="wc-date">{{ formatDisplayDate(activeWeatherDate || todayISO) }}</span>
             </div>
             <span class="wc-temp">{{ selectedWeatherEntry ? Math.round(selectedWeatherEntry.tempMax) + '°C' : '--' }}</span>
@@ -185,96 +185,7 @@
       </Teleport>
 
       <!-- ════ WEATHER OVERLAY (Enhanced) ════ -->
-      <Teleport to="body">
-        <div v-if="weatherOpen" class="weather-panel-wrapper">
-          <div class="weather-panel">
-            <div class="weather-header">
-              <div class="weather-title-row">
-                <span class="weather-main-icon">{{ selectedWeatherEntry ? getWeatherEmoji(selectedWeatherEntry.weathercode) : '🌤️' }}</span>
-                <div class="weather-title-meta">
-                  <div class="weather-title">
-                    {{ selectedWeatherEntry ? Math.round(selectedWeatherEntry.tempMax) + '°C' : '--' }}
-                    <span class="weather-today-label">
-                      {{ selectedWeatherEntry
-                          ? formatWeatherFullDate(selectedWeatherEntry.date)
-                          : 'Weather Forecast' }}
-                    </span>
-                  </div>
-                  <div class="weather-loc-row">
-                    📍 {{ userLocationName }}
-                    <button class="weather-locate-btn" @click="relocateWeather" :disabled="weatherLoading" title="Use my current location">
-                      <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <circle cx="12" cy="12" r="3" stroke-width="2"/>
-                        <path stroke-linecap="round" stroke-width="2" d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
-                      </svg>
-                      Locate
-                    </button>
-                  </div>
-                </div>
-                <button class="cal-close" @click="weatherOpen = false">×</button>
-              </div>
-            </div>
-
-            <div v-if="weatherLoading" class="cal-loading">
-              <div class="cal-spinner"></div>
-              <span>{{ selectedDateIsPast ? 'Fetching historical weather...' : 'Fetching forecast...' }}</span>
-            </div>
-
-            <div v-else-if="weatherData" class="weather-content">
-              <!-- Selected Day Hero -->
-              <div class="weather-today-card" v-if="selectedWeatherEntry">
-                <div class="today-left">
-                  <span class="today-temp">{{ Math.round(selectedWeatherEntry.tempMax) }}°C</span>
-                  <span class="today-desc">{{ getWeatherDesc(selectedWeatherEntry.weathercode) }}</span>
-                  <span class="today-date-label">{{ formatWeatherFullDate(selectedWeatherEntry.date) }}</span>
-                </div>
-                <div class="today-right">
-                  <div class="today-meta">
-                    <span>↑ {{ Math.round(selectedWeatherEntry.tempMax) }}° ↓ {{ Math.round(selectedWeatherEntry.tempMin) }}°</span>
-                    <span>💧 Rain: {{ selectedWeatherEntry.precip }} mm</span>
-                    <span>💨 Wind: {{ selectedWeatherEntry.windspeed }} km/h</span>
-                    <span>☀️ UV: {{ selectedWeatherEntry.uvindex }}</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Forecast Cards -->
-              <p class="forecast-label">
-                {{ selectedDateIsPast ? 'Historical + ' : '' }}{{ weatherEntries.length }}-Day Forecast
-              </p>
-              <div class="forecast-grid">
-                <div v-for="(entry, i) in weatherEntries" :key="entry.date" class="forecast-day-card" :class="{ 'fc-card-selected': selectedWeatherDateIndex === i }" @click="selectWeatherEntry(entry.date, i)">
-                  <span class="fc-day">{{ entry.date === todayISO ? 'Today' : formatWeatherDay(entry.date) }}</span>
-                  <span class="fc-icon">{{ getWeatherEmoji(entry.weathercode) }}</span>
-                  <span class="fc-temp">{{ Math.round(entry.tempMax) }}°</span>
-                  <span class="fc-precip" v-if="entry.precip > 0">💧 {{ entry.precip }}mm</span>
-                </div>
-              </div>
-
-              <!-- Data Sources -->
-              <div class="wth-sources-section">
-                <div class="wth-sources-inline">
-                  <a
-                    v-for="(src, index) in weatherSources"
-                    :key="src.name"
-                    :href="src.url"
-                    target="_blank"
-                    rel="noopener"
-                    class="wth-source-inline-link"
-                  >
-                    {{ src.name }}<span v-if="index < weatherSources.length - 1" class="wth-source-sep">•</span>
-                  </a>
-                </div>
-                <p class="wth-update-note">Last updated: {{ weatherFetchedAt || '—' }} · Coords: {{ weatherLat.toFixed(4) }}, {{ weatherLon.toFixed(4) }}</p>
-              </div>
-            </div>
-            <div v-else class="weather-error">
-              <p>Unable to load weather data.</p>
-              <button @click="fetchWeather()" class="retry-btn">Retry</button>
-            </div>
-          </div>
-        </div>
-      </Teleport>
+      
     </div>
   </div>
 </template>
@@ -527,7 +438,7 @@ const windowEndDate = computed(() => {
   if (weatherEntries.value.length === 0) return new Date(today.value)
   return new Date(`${weatherEntries.value[weatherEntries.value.length - 1].date}T00:00:00`)
 })
-const windowStartDate = computed(() => { const d = new Date(today.value); d.setDate(d.getDate() - 59); return d })
+const windowStartDate = computed(() => { const d = new Date(today.value); d.setDate(d.getDate() - 89); return d })
 const windowEnd = computed(() => formatLocalISO(windowEndDate.value))
 const windowStart = computed(() => formatLocalISO(windowStartDate.value))
 

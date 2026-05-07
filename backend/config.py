@@ -1,26 +1,4 @@
 
-"""
-config.py  — v5.3  (thesis-aligned, fixes applied)
-─────────────────────────────────────────────────────────────────────────────
-FIX-CONFIG-1: Removed hardcoded last_observed_date = "2026-02-15".
-              It is now computed dynamically from processed rasters at
-              runtime inside models.py / main.py via meta["last_date"].
-              A static string here would silently stale across seasons.
-
-FIX-CONFIG-2: Added SENTINEL2_BAND_INDICES dict so band positions are
-              configured once and referenced by processor.py. This replaces
-              the magic numbers read(3) / read(4) that silently produced
-              wrong SAVI values if the GEE export had a different band order.
-
-FIX-CONFIG-3: SARIMAX_CONFIG.raster_template key renamed to
-              forecast_raster_dir to avoid confusion with rasterio profile
-              templates. The "raster_template" concept is now fully internal
-              to main.py (derived from the most-recent Kc history raster).
-
-FIX-BOUNDARY: Removed undefined _gee_boundary() function call.
-              Falls back to GADM, then static hand-verified bbox.
-"""
-
 import os
 from pathlib import Path
 from dotenv import load_dotenv
