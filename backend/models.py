@@ -80,13 +80,13 @@ def build_date_file_map(directory: Optional[Path]) -> Dict[datetime, Path]:
 
 def is_rabi(date: datetime) -> bool:
     """Rabi season: Nov 15 to Apr 30 (thesis §3.1, §5.6)"""
-    return (date.month == 11 and date.day >= 15) or date.month in [12, 1, 2, 3, 4]
+    return (date.month == 11 and date.day >= 1) or date.month in [12, 1, 2, 3, 4]
 
 def _season_start_year(date: datetime) -> int:
     return date.year if date.month >= 11 else date.year - 1
 
 def _season_sowing_date(date: datetime) -> datetime:
-    return datetime(_season_start_year(date), 11, 15)
+    return datetime(_season_start_year(date), 11, 1)
 
 def _das_norm(date: datetime) -> float:
     return float(np.clip(days_after_sowing(date) / SEASON_LENGTH_DAYS, 0.0, 1.0))
@@ -629,7 +629,7 @@ def train_pet_model():
     exog_cols = ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy", "month", "pet_lag1"]
     exog = df[exog_cols]
     
-    model, metrics, order = _train_sarima(df["pet"], exog, "PET", seasonal_period=12)
+    model, metrics, order = _train_sarima(df["pet"], exog, "PET", seasonal_period=7)
     
     meta = {
         "model": model, 

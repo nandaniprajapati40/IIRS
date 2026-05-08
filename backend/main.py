@@ -23,10 +23,10 @@ from config import (
 from logging_config import setup_logging
 import models
 from models import (
-    build_forecast_exog,      # out-of-sample exog builder for SARIMAX/Ridge
-    set_forecast_context,     # injects last observed SAVI/Kc into exog builder
-    raster_mean,              # spatial mean utility
-    savi_to_kc,               # physics: Kc = KC_SLOPE × SAVI + KC_INTERCEPT
+    build_forecast_exog,
+    set_forecast_context,
+    raster_mean,
+    savi_to_kc,
     get_wheat_stage_info,
     get_wheat_stage_kc,
     KC_SLOPE,
@@ -38,21 +38,33 @@ from models import (
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Physical constants sourced from models.py (thesis linear regression)
-# KC_SLOPE, KC_INTERCEPT, KC_MIN, KC_MAX imported above from models
 CWR_MIN      = 0.0
 CWR_MAX      = 15.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CONSTANTS
+# SEASONAL CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════
 
-HISTORY_DATES  = 20   # ← increased from 12 for fuller calendar coverage
+# Rabi wheat season: November (month 11) → April (month 4)
+SEASON_START_MONTH = 11   # November
+SEASON_END_MONTH   = 4    # April
+SEASON_MONTHS      = {11, 12, 1, 2, 3, 4}   # months kept in calendar
+
+# Cap at 5 complete seasons (Nov 2021–Apr 2022 … Nov 2025–Apr 2026)
+MAX_SEASONS = 5
+
+# Total slots = 5 seasons × ~6 months × ~3 scenes/month = up to ~90
+# We keep this generous; actual data may be sparser. HISTORY_DATES controls
+# how many slots the pipeline writes; set it to accommodate 5 full seasons.
+HISTORY_DATES  = 191   # upper bound — actual dates may be fewer
 FORECAST_DAYS  = 15
 NODATA         = -9999.0
-PARAMS         = ["savi", "kc", "cwr", "iwr"]
-SLOTS: List[str] = ["today"] + [str(i) for i in range(1, HISTORY_DATES)]
+
+# All parameters including ETc
+PARAMS: List[str] = ["savi", "kc", "cwr", "iwr", "etc"]
+FC_PARAMS: List[str] = ["kc", "etc","cwr", "iwr"]   # parameters that get forecast rasters
+
 FORECAST_WINDOWS = ["5day", "10day", "15day"]
 WINDOW_DAYS      = {"5day": 5, "10day": 10, "15day": 15}
 
@@ -61,6 +73,16 @@ _VALID: Dict[str, Tuple[float, float]] = {
     "kc":   (KC_MIN, KC_MAX),
     "cwr":  (CWR_MIN, CWR_MAX),
     "iwr":  (0.0, CWR_MAX),
+    "etc":  (0.0, 15.0),
+}
+
+# Cumulative valid ranges for CWR/IWR forecast rasters (mm_total over window).
+# 15-day max = 15 × 15 mm/day = 225 mm; we cap at 200 to clip outliers.
+_VALID_FC: Dict[str, Tuple[float, float]] = {
+    "kc":  (KC_MIN, KC_MAX),
+    "etc": (0.0, 15.0),          # daily average → same as _VALID
+    "cwr": (0.0, 200.0),         # cumulative total mm over window
+    "iwr": (0.0, 200.0),
 }
 
 _SRC: Dict[str, Tuple[Path, str]] = {
@@ -68,6 +90,7 @@ _SRC: Dict[str, Tuple[Path, str]] = {
     "kc":   (DIRECTORIES["processed"]["kc"],   "kc_*.tif"),
     "cwr":  (DIRECTORIES["processed"]["cwr"],  "cwr_*.tif"),
     "iwr":  (DIRECTORIES["processed"]["iwr"],  "iwr_*.tif"),
+    "etc":  (DIRECTORIES["processed"]["ETc"],  "etc_*.tif"),
 }
 
 EXPORT_DIR   = DIRECTORIES["export"]["geoserver"]
@@ -76,7 +99,93 @@ FORECAST_DIR = EXPORT_DIR / "forecast"
 
 for _param in PARAMS:
     (HISTORY_DIR / _param).mkdir(parents=True, exist_ok=True)
+for _param in FC_PARAMS:
     (FORECAST_DIR / _param).mkdir(parents=True, exist_ok=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SEASONAL HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_season_id(date: datetime) -> str:
+    """
+    Return a canonical season string for a date, e.g. '2024-25'.
+    Season starts November 1; dates May–October fall outside any Rabi season.
+    """
+    m, y = date.month, date.year
+    if m >= SEASON_START_MONTH:          # Nov or Dec → season started this year
+        return f"{y}-{str(y + 1)[-2:]}"
+    elif m <= SEASON_END_MONTH:          # Jan–Apr → season started last year
+        return f"{y - 1}-{str(y)[-2:]}"
+    else:                                # May–Oct → off-season
+        return None
+
+
+def is_in_season(date: datetime) -> bool:
+    """Return True if date falls in Nov–Apr (Rabi season)."""
+    return date.month in SEASON_MONTHS
+
+
+def get_season_start(season_id: str) -> datetime:
+    """Return Nov 1 of the start year for a season string like '2024-25'."""
+    start_year = int(season_id.split("-")[0])
+    return datetime(start_year, SEASON_START_MONTH, 1)
+
+
+def get_allowed_season_ids() -> List[str]:
+    """
+    Return the list of season IDs (newest-first) that fall within the
+    MAX_SEASONS retention window.
+
+    Logic:
+      • Find the 'current' season (the one containing today or the most
+        recent completed season).
+      • Keep the last MAX_SEASONS seasons counting backwards from there.
+    """
+    today = datetime.utcnow()
+    # Determine the 'anchor' season
+    current = get_season_id(today)
+    if current is None:
+        # We are in the off-season (May–Oct).  Anchor = last completed season.
+        # Last completed season started in November of (this_year - 1).
+        anchor_year = today.year - 1
+        current = f"{anchor_year}-{str(anchor_year + 1)[-2:]}"
+
+    anchor_start_year = int(current.split("-")[0])
+    seasons = []
+    for i in range(MAX_SEASONS):
+        y = anchor_start_year - i
+        seasons.append(f"{y}-{str(y + 1)[-2:]}")
+    return seasons   # newest first
+
+
+def filter_to_allowed_seasons(dates: List[datetime]) -> List[datetime]:
+    """
+    Given a list of datetimes, return only those that:
+      1. Fall in Nov–Apr (Rabi season months)
+      2. Belong to one of the MAX_SEASONS allowed seasons
+    """
+    allowed = set(get_allowed_season_ids())
+    out = []
+    for d in dates:
+        if not is_in_season(d):
+            continue
+        sid = get_season_id(d)
+        if sid and sid in allowed:
+            out.append(d)
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SLOT HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def slot_for_index(idx: int) -> str:
+    return "today" if idx == 0 else str(idx)
+
+
+def _make_slots(n: int) -> List[str]:
+    return ["today"] + [str(i) for i in range(1, n)]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -84,20 +193,13 @@ for _param in PARAMS:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _MODEL_CACHE: Dict = {}
-
-# Forecast dataset cache — scheduler.py sets counts to -1 to force reload
 _fc_cache: Dict = {"pet_count": -1}
 
 
 def _get_model(model_type: str):
-    """Load and cache trained SARIMAx models.
-    Supported types: 'pet', 'kc', 'savi'
-    """
     global _MODEL_CACHE
-
     if model_type in _MODEL_CACHE:
         return _MODEL_CACHE[model_type]
-
     try:
         model, meta = models.load_model(model_type)
         _MODEL_CACHE[model_type] = (model, meta)
@@ -113,6 +215,8 @@ def _get_model(model_type: str):
     except Exception as e:
         logger.error(f"Failed to load {model_type} model: {e}")
         return None, None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # PATH HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -123,10 +227,6 @@ def history_path(param: str, slot: str) -> Path:
 
 def forecast_path(param: str, slot: str, window: str) -> Path:
     return FORECAST_DIR / param / f"{param}_{slot}_{window}.tif"
-
-
-def slot_for_index(idx: int) -> str:
-    return "today" if idx == 0 else str(idx)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -154,9 +254,17 @@ def _dated_files(directory: Path, pattern: str) -> List[Tuple[datetime, Path]]:
 
 
 def _latest_n_complete_dates(n: int = HISTORY_DATES) -> List[datetime]:
-    """N most-recent dates where ALL parameters have processed rasters. Newest-first."""
+    """
+    N most-recent dates where ALL core parameters (savi, kc, cwr, iwr) have
+    processed rasters AND the date falls within the allowed seasonal window
+    (Nov–Apr, last MAX_SEASONS seasons).  Newest-first.
+
+    ETc is optional — its absence does not exclude a date.
+    """
+    core_params = ["savi", "kc", "etc" , "cwr", "iwr"]
     date_sets = []
-    for param, (src_dir, pattern) in _SRC.items():
+    for param in core_params:
+        src_dir, pattern = _SRC[param]
         dates = {d for d, _ in _dated_files(src_dir, pattern)}
         if not dates:
             logger.warning(f"No {param} files in {src_dir}")
@@ -164,11 +272,14 @@ def _latest_n_complete_dates(n: int = HISTORY_DATES) -> List[datetime]:
         date_sets.append(dates)
 
     complete = set.intersection(*date_sets)
-    return sorted(complete, reverse=True)[:n]
+
+    # Apply seasonal filter
+    seasonal = filter_to_allowed_seasons(sorted(complete, reverse=True))
+
+    return seasonal[:n]
 
 
 def _read_mean(path: Path) -> Optional[float]:
-    """Spatial mean of valid (non-NODATA) pixels from a raster file."""
     if not path.exists():
         return None
     try:
@@ -183,11 +294,9 @@ def _read_mean(path: Path) -> Optional[float]:
 
 
 def _processed_mean_for_date(param: str, date: datetime) -> Optional[float]:
-    """Read the processed raster mean for the requested parameter/date."""
     src = _SRC.get(param)
     if src is None:
         return None
-
     src_dir, pattern = src
     date_key = date.replace(hour=0, minute=0, second=0, microsecond=0)
     for d, path in _dated_files(src_dir, pattern):
@@ -197,26 +306,18 @@ def _processed_mean_for_date(param: str, date: datetime) -> Optional[float]:
 
 
 def _reference_mean(param: str, reference_date: datetime, fallback: Optional[float] = None) -> Optional[float]:
-    """
-    Forecasts may be generated for any history slot, not only "today".
-    Prefer the raster from the actual reference date, then the matching
-    exported history slot, then the supplied fallback.
-    """
     value = _processed_mean_for_date(param, reference_date)
     if value is not None:
         return value
-
     for idx, d in enumerate(_latest_n_complete_dates(HISTORY_DATES)):
         if d.date() == reference_date.date():
             value = _read_mean(history_path(param, slot_for_index(idx)))
             if value is not None:
                 return value
-
     return fallback
 
 
 def _load_slot_array(param: str, slot: str) -> Optional[np.ndarray]:
-    """Load a history slot raster array (NaN for NODATA pixels)."""
     p = history_path(param, slot)
     if not p.exists():
         return None
@@ -269,25 +370,95 @@ def _get_wheat_mask() -> Optional[Dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# RASTER I/O
+# SEASONAL PURGE — delete rasters outside the retention window
 # ═══════════════════════════════════════════════════════════════════════════
 
-def cleanup_old_rasters():
+def purge_out_of_season_rasters() -> int:
+    """
+    Delete any history raster whose embedded acquisition_date tag falls
+    outside the allowed MAX_SEASONS window.  Also prunes raw processed files
+    older than the retention window to free disk space.
+
+    Returns count of deleted files.
+    """
+    allowed_seasons = set(get_allowed_season_ids())
+    deleted = 0
+
     for param in PARAMS:
-        valid_history  = {f"{param}_{s}.tif" for s in SLOTS}
-        valid_forecast = {
-            f"{fc_param}_{s}_{w}.tif"
-            for fc_param in ["kc", "cwr", "iwr"]
-            for s in SLOTS
-            for w in FORECAST_WINDOWS
-        }
+        param_dir = HISTORY_DIR / param
+        for tif in param_dir.glob("*.tif"):
+            try:
+                with rasterio.open(tif) as src:
+                    acq = src.tags().get("acquisition_date")
+                if not acq:
+                    continue
+                d = datetime.strptime(acq, "%Y-%m-%d")
+                if not is_in_season(d):
+                    tif.unlink()
+                    deleted += 1
+                    logger.info(f"[purge] off-season: {tif.name}")
+                    continue
+                sid = get_season_id(d)
+                if sid and sid not in allowed_seasons:
+                    tif.unlink()
+                    deleted += 1
+                    logger.info(f"[purge] old season {sid}: {tif.name}")
+            except Exception:
+                pass
+
+    # Purge forecast rasters whose slot raster was deleted
+    for param in FC_PARAMS:
+        for tif in (FORECAST_DIR / param).glob("*.tif"):
+            try:
+                with rasterio.open(tif) as src:
+                    acq = src.tags().get("acquisition_date") or src.tags().get("reference_date")
+                if acq:
+                    d = datetime.strptime(acq, "%Y-%m-%d")
+                    sid = get_season_id(d)
+                    if not is_in_season(d) or (sid and sid not in allowed_seasons):
+                        tif.unlink()
+                        deleted += 1
+            except Exception:
+                pass
+
+    if deleted:
+        logger.info(f"[purge] Removed {deleted} out-of-retention rasters")
+    return deleted
+
+
+def cleanup_old_rasters():
+    """
+    Remove any slot-named raster files that no longer correspond to a valid
+    slot (i.e. the current set of seasonal dates).  Runs purge first.
+    """
+    purge_out_of_season_rasters()
+
+    dates = _latest_n_complete_dates(HISTORY_DATES)
+    n = len(dates)
+    valid_slots = _make_slots(n)
+
+    for param in PARAMS:
+        valid_history = {f"{param}_{s}.tif" for s in valid_slots}
         for f in (HISTORY_DIR / param).glob("*.tif"):
             if f.name not in valid_history:
                 f.unlink()
+                logger.debug(f"[cleanup] removed stale slot file: {f.name}")
+
+    for param in FC_PARAMS:
+        valid_forecast = {
+            f"{param}_{s}_{w}.tif"
+            for s in valid_slots
+            for w in FORECAST_WINDOWS
+        }
         for f in (FORECAST_DIR / param).glob("*.tif"):
             if f.name not in valid_forecast:
                 f.unlink()
+                logger.debug(f"[cleanup] removed stale forecast file: {f.name}")
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RASTER I/O
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _reproject_and_write(
     src_path: Path,
@@ -296,7 +467,6 @@ def _reproject_and_write(
     date: datetime,
     extra_tags: Optional[Dict] = None,
 ) -> bool:
-    """Reproject processed raster → wheat-mask grid, clamp, mask, write."""
     grid = _get_wheat_mask()
     if grid is None:
         return False
@@ -357,6 +527,7 @@ def _reproject_and_write(
             tags = {
                 "parameter":        param,
                 "acquisition_date": date.strftime("%Y-%m-%d"),
+                "season":           get_season_id(date) or "",
                 "mean":             str(round(mean_val, 4)) if mean_val is not None else "",
             }
             if extra_tags:
@@ -374,7 +545,6 @@ def _write_array_raster(
     dst_path: Path,
     tags: Dict,
 ) -> bool:
-    """Write a NumPy array as a GeoTIFF using `template` for georef metadata."""
     try:
         with rasterio.open(template) as src:
             profile = src.profile.copy()
@@ -398,7 +568,6 @@ def _write_array_raster(
 
 
 def _pixel_avg(arrays: List[np.ndarray]) -> np.ndarray:
-    """Pixel-wise mean ignoring NODATA."""
     stack = np.stack(arrays, axis=0)
     valid = (stack != float(NODATA)) & ~np.isnan(stack)
     total = np.where(valid, stack, 0.0).sum(axis=0)
@@ -411,13 +580,21 @@ def _pixel_avg(arrays: List[np.ndarray]) -> np.ndarray:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def generate_history_rasters() -> int:
-    """Write history/{param}/{param}_{slot}.tif for every param × slot."""
+    """
+    Write history/{param}/{param}_{slot}.tif for every param × slot.
+    Slots are assigned newest-first from the seasonal-filtered date list.
+    ETc is optional — missing ETc for a date is silently skipped.
+    """
     dates = _latest_n_complete_dates(HISTORY_DATES)
     if not dates:
-        logger.error("[history] No complete Sentinel dates")
+        logger.error("[history] No complete Sentinel dates in allowed seasons")
         return 0
 
-    logger.info(f"[history] {len(dates)} dates: {dates[-1].date()} → {dates[0].date()}")
+    logger.info(
+        f"[history] {len(dates)} seasonal dates: "
+        f"{dates[-1].date()} → {dates[0].date()} "
+        f"| seasons={sorted(set(get_season_id(d) for d in dates))}"
+    )
     total = 0
 
     for param, (src_dir, pattern) in _SRC.items():
@@ -425,7 +602,8 @@ def generate_history_rasters() -> int:
         for idx, date in enumerate(dates):
             src_path = src_by_date.get(date)
             if src_path is None:
-                logger.warning(f"[history] {param} missing for {date.date()}")
+                if param != "etc":
+                    logger.warning(f"[history] {param} missing for {date.date()}")
                 continue
             slot     = slot_for_index(idx)
             dst_path = history_path(param, slot)
@@ -446,18 +624,15 @@ def generate_history_rasters() -> int:
 
         logger.info(f"[history] {param} done")
 
-    logger.info(f"[history] Total: {total} / {HISTORY_DATES * len(PARAMS)}")
+    logger.info(f"[history] Total: {total} / {len(dates) * len(PARAMS)}")
     return total
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP B — FORECASTING  (Fixed - Thesis Compliant)
-# Only PET uses SARIMAX. Kc uses its own trained SARIMAx + DOY adjustment.
-
+# STEP B — FORECASTING  (Thesis-compliant)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _effective_rainfall_daily(rain_mm: float) -> float:
-    """Daily effective rainfall using the thesis/FAO monthly formula scaled to 1 day."""
     rain_mm = max(float(rain_mm), 0.0)
     period_factor = 1.0 / 30.0
     threshold = 75.0 * period_factor
@@ -467,24 +642,15 @@ def _effective_rainfall_daily(rain_mm: float) -> float:
 
 
 def _rainfall_mean_for_date(date: datetime, rain_by_date: Dict[datetime, Path]) -> float:
-    """Return rainfall for the forecast date; missing future rain is treated as dry."""
     date_key = date.replace(hour=0, minute=0, second=0, microsecond=0)
     rain_path = rain_by_date.get(date_key)
     if rain_path is None:
         return 0.0
-
     rain_val = raster_mean(rain_path, mask_zeros=False)
     return float(rain_val) if np.isfinite(rain_val) and rain_val >= 0 else 0.0
 
 
 def _climatological_peff(future_dates: pd.DatetimeIndex) -> np.ndarray:
-    """Estimate daily effective rainfall for each forecast date.
-
-    Earlier code reused the latest rain rasters on disk for every reference
-    date. That made historical stage forecasts subtract the same Peff and often
-    flattened IWR to zero. The thesis chain is date based: IWR = CWR - Peff for
-    the forecast period, so rainfall must come from the matching forecast dates.
-    """
     rain_dir = DIRECTORIES["raw"].get("insat_rain")
     rain_by_date: Dict[datetime, Path] = {}
 
@@ -508,8 +674,7 @@ def _climatological_peff(future_dates: pd.DatetimeIndex) -> np.ndarray:
 
     logger.info(
         f"[forecast] Peff mean={peff_vals.mean():.3f} mm/day "
-        f"range={peff_vals.min():.3f}–{peff_vals.max():.3f} "
-        "(date-matched rain; FAO monthly formula scaled to daily)"
+        f"range={peff_vals.min():.3f}–{peff_vals.max():.3f}"
     )
     return peff_vals
 
@@ -518,88 +683,62 @@ def _project_kc_for_dates(
     future_dates: pd.DatetimeIndex,
     reference_date: Optional[datetime] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    THESIS-COMPLIANT Kc forecasting.
-    
-    Strategy (v13.0 — thesis §4.6, §5.6):
-        1. Use trained SARIMA Kc model for Kc forecast.
-        2. If model unavailable, use FAO-56 stage Kc as fallback.
-        3. SAVI is NOT used to forecast Kc — Kc has its own SARIMA.
-    
-    Returns (savi_forecast, kc_forecast) — both shape (len(future_dates),).
-    """
-    # ── Load trained Kc SARIMA model ──────────────────────────────────────
     kc_model, kc_meta = _get_model("kc")
-    
+
     anchor_date = reference_date or (future_dates[0].to_pydatetime() - timedelta(days=1))
     last_kc_obs = _reference_mean("kc", anchor_date, 0.80) or 0.80
     last_savi_obs = _reference_mean("savi", anchor_date, None) or (
         (last_kc_obs - KC_INTERCEPT) / KC_SLOPE
     )
     set_forecast_context(last_savi=last_savi_obs, last_kc=last_kc_obs)
-    
+
     days_ahead = np.arange(1, len(future_dates) + 1, dtype=float)
-    
+
     if kc_model is not None:
-        # ── Use trained SARIMA Kc model ───────────────────────────────
         logger.info("Using trained SARIMA Kc model for forecast")
         exog_cols = kc_meta.get("exog_cols", ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy"])
         exog_df = build_forecast_exog(future_dates=future_dates, exog_cols=exog_cols)
-        
+
         if hasattr(kc_model, "get_forecast"):
             kc_fc = kc_model.get_forecast(steps=len(future_dates), exog=exog_df)
             kc_forecast = kc_fc.predicted_mean.values.astype(float)
         else:
             kc_forecast = kc_model.forecast(steps=len(future_dates), exog=exog_df).values.astype(float)
-        
+
         stage_kc = np.array([
             get_wheat_stage_kc(d.to_pydatetime())[1]
             for d in future_dates
         ], dtype=float)
         kc_forecast = 0.65 * kc_forecast + 0.35 * stage_kc
-
-        # Smooth first few days to the selected reference-date observation.
         alpha = np.exp(-days_ahead / 5.0)
         kc_forecast = alpha * float(last_kc_obs) + (1 - alpha) * kc_forecast
-        
+
     else:
-        # ── Fallback: FAO-56 stage Kc ──────────────────────────────────
         logger.warning("No Kc SARIMA model — using FAO-56 stage Kc")
         kc_forecast = np.array([
             get_wheat_stage_kc(d.to_pydatetime())[1]
             for d in future_dates
         ], dtype=float)
-    
+
     kc_forecast = np.clip(kc_forecast, KC_MIN, KC_MAX)
-    
-    # ── Derive SAVI from Kc (inverse of thesis equation) ──────────────
-    # Kc = 1.2088 * SAVI + 0.5375  →  SAVI = (Kc - 0.5375) / 1.2088
     savi_forecast = np.clip((kc_forecast - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
-    
-    # Log crop stage context
+
     first_stage, first_kc_fao = get_wheat_stage_kc(future_dates[0].to_pydatetime())
     logger.info(
-        f"Kc forecast [SARIMA/FAO-56]: "
-        f"Kc_mean={kc_forecast.mean():.3f}, "
+        f"Kc forecast: Kc_mean={kc_forecast.mean():.3f}, "
         f"range={kc_forecast.min():.3f}–{kc_forecast.max():.3f} "
         f"| crop_stage={first_stage} (FAO-56 Kc={first_kc_fao:.3f})"
     )
     return savi_forecast, kc_forecast
+
 
 def generate_forecast_for_date(
     reference_date: datetime,
     days: int = FORECAST_DAYS,
 ) -> Dict[str, pd.Series]:
     """
-    THESIS-COMPLIANT forecasting pipeline (v13.0).
-    
-    THESIS §4.6, §5.6 chain:
-      1. Forecast Kc with SARIMA(1,1,1)(1,1,1,12) 
-      2. Forecast PET with SARIMA(1,1,1)(1,1,1,12) [NO SAVI input]
-      3. CWR = Kc × PET  (FAO-56 Eq. 4)
-      4. IWR = max(CWR − Peff, 0)  (FAO-56 §4.5)
-    
-    CRITICAL: NO SAVI in PET model. PET is meteorological.
+    THESIS-COMPLIANT forecasting pipeline.
+    Chain: Kc (SARIMA) → PET (SARIMA) → CWR = Kc × PET → IWR = max(CWR−Peff,0)
     """
     forecasts: Dict[str, pd.Series] = {}
 
@@ -609,23 +748,20 @@ def generate_forecast_for_date(
         freq="D",
     )
 
-    # ── 1. Forecast Kc with trained SARIMA ──────────────────────────────
+    # ── 1. Forecast Kc ──────────────────────────────────────────────────────
     kc_model, kc_meta = _get_model("kc")
     if kc_model is None:
-        raise RuntimeError(
-            "[forecast] Kc model not available. Run models.train_all_models()."
-        )
-    
+        raise RuntimeError("[forecast] Kc model not available.")
+
     last_kc_obs = _reference_mean("kc", reference_date, kc_meta.get("last_kc", 0.80)) or 0.80
     last_savi_obs = _reference_mean("savi", reference_date, None) or kc_meta.get(
-        "last_savi",
-        (last_kc_obs - KC_INTERCEPT) / KC_SLOPE,
+        "last_savi", (last_kc_obs - KC_INTERCEPT) / KC_SLOPE,
     )
     set_forecast_context(last_savi=last_savi_obs, last_kc=last_kc_obs)
-    
+
     exog_cols_kc = kc_meta.get("exog_cols", ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy"])
     exog_kc = build_forecast_exog(future_dates=future_dates, exog_cols=exog_cols_kc)
-    
+
     if hasattr(kc_model, "get_forecast"):
         kc_fc = kc_model.get_forecast(steps=days, exog=exog_kc)
         kc_values = kc_fc.predicted_mean.values.astype(float)
@@ -637,36 +773,27 @@ def generate_forecast_for_date(
         for d in future_dates
     ], dtype=float)
     kc_values = 0.65 * kc_values + 0.35 * stage_kc
-    
-    # Smooth to the selected reference-date crop state for the first few days.
     alpha_kc = np.exp(-np.arange(1, days + 1, dtype=float) / 5.0)
     kc_values = alpha_kc * float(last_kc_obs) + (1 - alpha_kc) * kc_values
     kc_values = np.clip(kc_values, KC_MIN, KC_MAX)
-    
     forecasts["kc"] = pd.Series(kc_values, index=future_dates, name="kc")
 
-    # ── 2. Forecast PET with trained SARIMA — NO SAVI ─────────────────
+    # ── 2. Forecast PET ─────────────────────────────────────────────────────
     pet_model, pet_meta = _get_model("pet")
     if pet_model is None:
-        raise RuntimeError(
-            "[forecast] PET model not available. Run models.train_all_models()."
-        )
-    
-    # Estimate last PET from CWR/Kc
+        raise RuntimeError("[forecast] PET model not available.")
+
     last_cwr_obs = _reference_mean("cwr", reference_date, 3.5) or 3.5
     last_pet_obs = pet_meta.get("last_pet")
     if last_pet_obs is None or not np.isfinite(last_pet_obs):
         last_pet_obs = last_cwr_obs / last_kc_obs if last_kc_obs > 0 else 4.0
 
-    # PET may include lag exog; seed it from the selected reference-date context.
     set_forecast_context(
-        last_savi=last_savi_obs,
-        last_kc=last_kc_obs,
-        last_pet=float(last_pet_obs),
+        last_savi=last_savi_obs, last_kc=last_kc_obs, last_pet=float(last_pet_obs),
     )
     exog_cols_pet = pet_meta.get("exog_cols", ["sin_doy", "cos_doy", "sin2_doy", "cos2_doy", "month"])
     exog_pet = build_forecast_exog(future_dates=future_dates, exog_cols=exog_cols_pet)
-    
+
     if hasattr(pet_model, "get_forecast"):
         pet_fc = pet_model.get_forecast(steps=days, exog=exog_pet)
         base_pet = pet_fc.predicted_mean.values.astype(float)
@@ -674,46 +801,61 @@ def generate_forecast_for_date(
         base_pet = pet_model.forecast(steps=days, exog=exog_pet).values.astype(float)
     if pet_meta.get("target_transform") == "log1p":
         base_pet = np.expm1(base_pet)
-    
-    # Mild seasonal regulariser (keeps long-range realistic)
+
     doy = future_dates.dayofyear.values.astype(float)
     seasonal_pet = 5.5 + 3.2 * np.sin(2 * np.pi * (doy - 45) / 365.25)
     pet_values = 0.65 * base_pet + 0.35 * seasonal_pet
-    
-    # Smooth first few days
     alpha_pet = np.exp(-np.arange(days) / 5.0)
     pet_values = alpha_pet * float(last_pet_obs) + (1 - alpha_pet) * pet_values
     pet_values = np.clip(pet_values, 1.5, 12.0)
-    
     forecasts["pet"] = pd.Series(pet_values, index=future_dates, name="pet")
 
-    # ── 3. Physics: CWR = Kc × PET ────────────────────────────────────
+    # ── 3. CWR = Kc × PET ───────────────────────────────────────────────────
     cwr_arr = np.clip(kc_values * pet_values, CWR_MIN, CWR_MAX)
     forecasts["cwr"] = pd.Series(cwr_arr, index=future_dates, name="cwr")
 
-    # ── 4. Physics: IWR = max(CWR − Peff, 0) ─────────────────────────
+    # ── 4. IWR = max(CWR − Peff, 0) ─────────────────────────────────────────
     peff_arr = _climatological_peff(future_dates)
     iwr_arr = np.maximum(cwr_arr - peff_arr, 0.0)
     forecasts["iwr"] = pd.Series(iwr_arr, index=future_dates, name="iwr")
     forecasts["peff"] = pd.Series(peff_arr, index=future_dates, name="peff")
-    
-    # ── Derive SAVI from Kc for dashboard consistency ─────────────────
+
+    # ── SAVI (derived from Kc) ───────────────────────────────────────────────
     savi_arr = np.clip((kc_values - KC_INTERCEPT) / KC_SLOPE, -0.1, 0.9)
     forecasts["savi"] = pd.Series(savi_arr, index=future_dates, name="savi")
 
-    # ── Crop-stage summary log ────────────────────────────────────────
+    # ── ETc = Kc × PET = CWR (daily evapotranspiration rate, same physics) ──
+    # ETc forecast uses DAILY VALUES (not cumulative) — aggregated as AVERAGE.
+    forecasts["etc"] = pd.Series(cwr_arr.copy(), index=future_dates, name="etc")
+
     stage_info = get_wheat_stage_info(future_dates[0].to_pydatetime())
     logger.info(
         f"[forecast] Generated for {reference_date.date()}: "
-        f"stage={stage_info['stage']} (DAS={stage_info['das']}, "
-        f"FAO-56 Kc={stage_info['kc_fao56']:.3f}) | "
+        f"stage={stage_info['stage']} "
         f"Kc_mean={forecasts['kc'].mean():.3f}, "
         f"PET_mean={forecasts['pet'].mean():.2f}, "
         f"CWR_mean={forecasts['cwr'].mean():.2f}, "
         f"IWR_mean={forecasts['iwr'].mean():.2f}"
     )
-
     return forecasts
+
+
+def _forecast_raster_is_fresh(param: str, slot: str, window: str, date: datetime) -> bool:
+    """
+    Return True when a forecast raster already exists AND was generated from
+    exactly the same reference date.  This lets us skip the expensive SARIMA
+    re-forecast for slots that have not changed since the last pipeline run.
+    """
+    p = forecast_path(param, slot, window)
+    if not p.exists():
+        return False
+    try:
+        with rasterio.open(p) as src:
+            tags = src.tags()
+            return tags.get("acquisition_date") == date.strftime("%Y-%m-%d")
+    except Exception:
+        return False
+
 
 def create_forecast_raster(
     param: str,
@@ -721,28 +863,47 @@ def create_forecast_raster(
     window: str,
     forecast_series: pd.Series,
     template_raster: Path,
+    date: datetime,                     # ← actual acquisition date of this slot
 ) -> bool:
     """
-    Create forecast raster by scaling the template spatial pattern to the
-    forecast mean.  This preserves within-field spatial variability while
-    applying the modelled temporal change.
+    Write a single forecast raster.
+
+    Aggregation rules
+    -----------------
+    CWR / IWR  →  cumulative SUM  over the window  (units: mm_total)
+    ETc  / Kc  →  spatial AVERAGE over the window  (units: mm/day or dimensionless)
     """
+    # ── Fast-path: skip if the raster already reflects this date ──────────
+    if _forecast_raster_is_fresh(param, slot, window, date):
+        logger.debug(f"[forecast] skip {param} {slot} {window} — already fresh")
+        return True
+
     try:
+        WINDOW_SLICES = {"5day": (0, 5), "10day": (0, 10), "15day": (0, 15)}
+        start_idx, end_idx = WINDOW_SLICES[window]
+        window_days = end_idx - start_idx
+
         with rasterio.open(template_raster) as src:
             template_data = src.read(1).astype(np.float64)
             nodata        = src.nodata if src.nodata is not None else NODATA
             template_data = np.where(template_data == nodata, np.nan, template_data)
             profile       = src.profile.copy()
 
-            WINDOW_SLICES = {
-                "5day": (0, 5),
-                "10day": (0, 10),
-                "15day": (0, 15),
-            }
-
-            start_idx, end_idx = WINDOW_SLICES[window]
             window_forecast = forecast_series.iloc[start_idx:end_idx]
-            forecast_mean = float(window_forecast.mean())
+
+            # ── CWR & IWR: cumulative total over the window ────────────────
+            if param in ["cwr", "iwr"]:
+                forecast_val = float(window_forecast.sum())
+                agg_label    = "total"
+                unit_label   = "mm"
+                units_tag    = "mm_total"
+            # ── ETc & Kc: daily average over the window ────────────────────
+            else:
+                forecast_val = float(window_forecast.mean())
+                agg_label    = "mean"
+                unit_label   = "mm/day" if param == "etc" else ""
+                units_tag    = "mm_per_day" if param == "etc" else ""
+
             stage_info = get_wheat_stage_info(window_forecast.index[0].to_pydatetime())
 
         valid = ~np.isnan(template_data)
@@ -752,13 +913,18 @@ def create_forecast_raster(
 
         template_mean = float(np.nanmean(template_data[valid]))
 
+        # Scale the spatial pattern of the template raster to the forecast value.
+        # For CWR/IWR the template is in mm/day; scaling by (sum / daily_mean)
+        # = (mean_daily × window_days / daily_mean) correctly yields mm_total
+        # spatial values while preserving the relative spatial distribution.
         if template_mean > 0:
-            scale_factor   = forecast_mean / template_mean
+            scale_factor   = forecast_val / template_mean
             forecast_array = np.where(valid, template_data * scale_factor, np.nan)
         else:
-            forecast_array = np.where(valid, forecast_mean, np.nan)
+            forecast_array = np.where(valid, forecast_val, np.nan)
 
-        vmin, vmax     = _VALID.get(param, (-1e9, 1e9))
+        # Clip to the correct valid range (cumulative for CWR/IWR)
+        vmin, vmax     = _VALID_FC.get(param, _VALID.get(param, (-1e9, 1e9)))
         forecast_array = np.clip(forecast_array, vmin, vmax)
 
         dst_path = forecast_path(param, slot, window)
@@ -778,20 +944,24 @@ def create_forecast_raster(
                 parameter=param,
                 slot=slot,
                 forecast_window=window,
-                reference_date=slot,
-                forecast_mean=str(round(forecast_mean, 4)),
+                acquisition_date=date.strftime("%Y-%m-%d"),   # ← actual date for freshness check
+                reference_date=date.strftime("%Y-%m-%d"),
+                forecast_mean=str(round(forecast_val, 4)),
                 template_mean=str(round(template_mean, 4)),
                 crop_stage=stage_info["stage"],
                 days_after_sowing=str(stage_info["das"]),
                 kc_fao56=str(round(stage_info["kc_fao56"], 4)),
-                units="mm_per_day" if param in ["cwr", "iwr"] else "",
+                units=units_tag,
+                aggregation="sum" if param in ["cwr", "iwr"] else "mean",
+                window_days=str(window_days),
                 model="PET-SARIMAX+Physics-CWR/IWR",
-                generated_by="irrigation_monitoring_v9.0",
+                generated_by="irrigation_monitoring_v10.1",
             )
 
         logger.info(
             f"Created {param} forecast for {slot} {window}: "
-            f"mean={forecast_mean:.4f} mm/day (template mean={template_mean:.4f})"
+            f"{agg_label}={forecast_val:.4f} "
+            f"{unit_label}"
         )
         return True
 
@@ -801,55 +971,71 @@ def create_forecast_raster(
 
 
 def generate_all_forecast_rasters() -> int:
-    """
-    Generate all forecast rasters (2 params × 12 slots × 3 windows)
-    using the corrected PET-SARIMAX + physics CWR/IWR pipeline.
-    """
     dates = _latest_n_complete_dates(HISTORY_DATES)
     if not dates:
         logger.error("[forecast] No Sentinel dates available")
         return 0
 
     total = 0
+    n = len(dates)
+    slots = _make_slots(n)
 
     for idx, date in enumerate(dates):
-        slot      = slot_for_index(idx)
-        forecasts = generate_forecast_for_date(date, FORECAST_DAYS)
+        slot = slots[idx]
 
+        # ── Slot-level freshness check ──────────────────────────────────────
+        # If every expected forecast raster for this slot already carries the
+        # correct acquisition_date tag, the SARIMA forecast can be skipped
+        # entirely — saving minutes of compute per slot.
+        params_with_template = [
+            p for p in FC_PARAMS if history_path(p, slot).exists()
+        ]
+        all_fresh = bool(params_with_template) and all(
+            _forecast_raster_is_fresh(p, slot, w, date)
+            for p in params_with_template
+            for w in FORECAST_WINDOWS
+        )
+        if all_fresh:
+            n_skip = len(params_with_template) * len(FORECAST_WINDOWS)
+            total += n_skip
+            logger.debug(
+                f"[forecast] slot={slot} ({date.date()}): "
+                f"all {n_skip} rasters fresh — skipping SARIMA"
+            )
+            continue
+
+        # ── Run SARIMA forecast for this reference date ────────────────────
+        forecasts = generate_forecast_for_date(date, FORECAST_DAYS)
         if not forecasts:
             logger.warning(f"[forecast] No forecast for {slot} ({date.date()})")
             continue
 
         n_rasters = 0
-        for param in ["kc", "cwr", "iwr"]:
+        for param in FC_PARAMS:
             if param not in forecasts:
                 continue
             for window in FORECAST_WINDOWS:
-                dst_path = forecast_path(param, slot, window)
-
-                # FORCED REGENERATION: Logic changes in main.py must be reflected immediately.
-                # Removing the skip check to ensure fresh forecasts whenever the pipeline runs.
                 template = history_path(param, slot)
                 if template.exists():
                     if create_forecast_raster(
-                        param, slot, window, forecasts[param], template
+                        param, slot, window,
+                        forecasts[param], template,
+                        date,           # ← actual date for freshness tag
                     ):
                         n_rasters += 1
                         total += 1
 
-        logger.info(f"[forecast] slot={slot} ({date.date()}): {n_rasters} files")
+        logger.info(f"[forecast] slot={slot} ({date.date()}): {n_rasters} files written")
 
-    expected_total = len(dates) * 3 * len(FORECAST_WINDOWS)  # kc + cwr + iwr
+    expected_total = n * len(FC_PARAMS) * len(FORECAST_WINDOWS)
     logger.info(f"[forecast] ALL: {total} / {expected_total}")
     return total
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP C — PUSH TO GEOSERVER
 # ═══════════════════════════════════════════════════════════════════════════
- 
+
 def push_to_geoserver() -> None:
     try:
         from init_geoserver import GeoServerAPI
@@ -857,59 +1043,51 @@ def push_to_geoserver() -> None:
     except Exception as e:
         logger.warning(f"[geoserver] Cannot init GeoServerAPI: {e}")
         return
- 
-    for param in ["savi", "kc", "cwr", "iwr"]:
-        for slot in SLOTS:
+
+    dates = _latest_n_complete_dates(HISTORY_DATES)
+    n = len(dates)
+    slots = _make_slots(n)
+
+    for param in PARAMS:
+        for slot in slots:
             p = history_path(param, slot)
             if not p.exists():
                 continue
             store = f"{param}_{slot}"
-            layer = store
+            style = "etc_style" if param == "etc" else f"{param}_style"
             try:
                 store_ok     = gs.create_coverage_store_if_not_exists(store, p)
                 file_ok      = gs.update_coverage_store_file(store, p)
-                # configure_layer now auto-publishes via publish_coverage() on 404
-                configure_ok = gs.configure_layer(layer_name=layer, store_name=store)
-                style        = f"{param}_style"
-                style_ok     = gs.assign_style(layer, style)
+                configure_ok = gs.configure_layer(layer_name=store, store_name=store)
+                style_ok     = gs.assign_style(store, style)
                 if store_ok and file_ok and configure_ok and style_ok:
-                    logger.info(f"[geoserver] ✅ Layer ready: {layer}")
+                    logger.info(f"[geoserver] ✅ Layer ready: {store}")
                 else:
-                    logger.warning(
-                        f"[geoserver] ⚠ Layer partially configured: {layer} "
-                        f"(store={store_ok} file={file_ok} "
-                        f"configure={configure_ok} style={style_ok})"
-                    )
+                    logger.warning(f"[geoserver] ⚠ Partial: {store}")
             except Exception as e:
                 logger.warning(f"[geoserver] {store}: {e}")
- 
-    # Push forecast rasters for kc, cwr, iwr
-    for param in ["kc", "cwr", "iwr"]:
-        for slot in SLOTS:
+
+    for param in FC_PARAMS:
+        for slot in slots:
             for window in FORECAST_WINDOWS:
                 p = forecast_path(param, slot, window)
                 if not p.exists():
                     continue
                 store = f"{param}_{slot}_{window}"
-                layer = store
+                # CWR/IWR forecast rasters are cumulative (mm_total) so they
+                # need dedicated SLD styles with the wider 0-200 mm colour range.
+                if param in ("cwr", "iwr"):
+                    fc_style = f"{param}_forecast_style"
+                else:
+                    fc_style = f"{param}_style"
                 try:
-                    store_ok     = gs.create_coverage_store_if_not_exists(store, p)
-                    file_ok      = gs.update_coverage_store_file(store, p)
-                    # configure_layer now auto-publishes via publish_coverage() on 404
-                    configure_ok = gs.configure_layer(layer_name=layer, store_name=store)
-                    style        = f"{param}_style"
-                    style_ok     = gs.assign_style(layer, style)
-                    if store_ok and file_ok and configure_ok and style_ok:
-                        logger.info(f"[geoserver] ✅ Forecast layer ready: {layer}")
-                    else:
-                        logger.warning(
-                            f"[geoserver] ⚠ Forecast layer partially configured: {layer} "
-                            f"(store={store_ok} file={file_ok} "
-                            f"configure={configure_ok} style={style_ok})"
-                        )
+                    gs.create_coverage_store_if_not_exists(store, p)
+                    gs.update_coverage_store_file(store, p)
+                    gs.configure_layer(layer_name=store, store_name=store)
+                    gs.assign_style(store, fc_style)
+                    logger.info(f"[geoserver] ✅ Forecast layer ready: {store} (style={fc_style})")
                 except Exception as e:
                     logger.warning(f"[geoserver] {store}: {e}")
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -917,15 +1095,8 @@ def push_to_geoserver() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_pipeline() -> Dict:
-    """
-    Full pipeline run:
-      A. History rasters
-      B. Forecast generation (PET SARIMAX → physics CWR/IWR)
-      C. Forecast rasters
-      D. GeoServer push
-    """
     logger.info("═" * 65)
-    logger.info("run_pipeline() START — v9.0 (PET-SARIMAX + Physics CWR/IWR)")
+    logger.info("run_pipeline() START — v10.0 (Seasonal Cap + ETc)")
     logger.info("═" * 65)
 
     cleanup_old_rasters()
@@ -933,34 +1104,27 @@ def run_pipeline() -> Dict:
 
     logger.info("── A: History rasters ──")
     h_total = generate_history_rasters()
-    logger.info(f"── A done: {h_total}/{HISTORY_DATES * len(PARAMS)} ──")
 
     logger.info("── B/C: Forecast + rasters ──")
     _get_model("pet")
     f_total = generate_all_forecast_rasters()
-    logger.info(f"── B/C done: {f_total}/{HISTORY_DATES * 3 * len(FORECAST_WINDOWS)} ──")
 
     logger.info("── D: GeoServer ──")
     push_to_geoserver()
 
     dates   = _latest_n_complete_dates()
+    n = len(dates)
     summary = {
-        "slots":              {slot_for_index(i): str(d.date()) for i, d in enumerate(dates)},
-        "history_rasters":    h_total,
-        "forecast_rasters":   f_total,
-        "grand_total":        h_total + f_total,
-        "units":              "mm_per_day",
-        "forecast_model":     "PET-SARIMAX + Physics CWR/IWR",
-        "physical_relationships": {
-            "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}",
-            "cwr":        "CWR = Kc_projected × PET_forecast  (FAO-56 Eq. 4)",
-            "iwr":        "IWR = max(CWR − Peff, 0)  (FAO-56 §4.5)",
-            "peff":       "Peff = USDA-SCS on interval rainfall total",
-        },
+        "slots":            {slot_for_index(i): str(d.date()) for i, d in enumerate(dates)},
+        "n_dates":          n,
+        "seasons":          sorted(set(get_season_id(d) for d in dates)),
+        "history_rasters":  h_total,
+        "forecast_rasters": f_total,
+        "grand_total":      h_total + f_total,
+        "units":            "mm_per_day",
+        "forecast_model":   "PET-SARIMAX + Physics CWR/IWR",
     }
-    logger.info("═" * 65)
     logger.info(f"DONE: {summary}")
-    logger.info("═" * 65)
     return summary
 
 
@@ -976,19 +1140,16 @@ def generate_operational_rasters() -> None:
         logger.info(f"[generate_operational_rasters] history rasters: {h}")
     except Exception as e:
         logger.error(f"[generate_operational_rasters] history step failed: {e}", exc_info=True)
-
     try:
         f = generate_all_forecast_rasters()
         logger.info(f"[generate_operational_rasters] forecast rasters: {f}")
     except Exception as e:
         logger.error(f"[generate_operational_rasters] forecast step failed: {e}", exc_info=True)
-
     try:
         push_to_geoserver()
         logger.info("[generate_operational_rasters] GeoServer push done")
     except Exception as e:
         logger.error(f"[generate_operational_rasters] GeoServer push failed: {e}", exc_info=True)
-
     logger.info("[generate_operational_rasters] DONE")
 
 
@@ -1005,10 +1166,7 @@ def process_single_sentinel_image(tif_path: Path) -> None:
         run_iwr(p)
         logger.info(f"[process_single_sentinel_image] complete for {tif_path.name}")
     except Exception as e:
-        logger.error(
-            f"[process_single_sentinel_image] failed for {tif_path.name}: {e}",
-            exc_info=True,
-        )
+        logger.error(f"[process_single_sentinel_image] failed for {tif_path.name}: {e}", exc_info=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1019,14 +1177,14 @@ from graph import router as graph_router
 
 app = FastAPI(
     title="Wheat Irrigation Monitoring System",
-    version="9.0.0",
+    version="10.0.0",
     description=(
-        "v9.0 — Corrected forecast design:\n\n"
-        "  • PET forecasted with SARIMAX (only statistically forecasted variable)\n"
-        "  • CWR = Kc_projected × PET_forecast  (FAO-56 Eq. 4, physics)\n"
-        "  • IWR = max(CWR − Peff, 0)  (FAO-56 §4.5, physics)\n\n"
-        "Physical chain: SAVI → Kc → CWR → IWR\n"
-        "No IWR direct forecasting. No circular exog dependencies."
+        "v10.0 — Seasonal cap (5 seasons Nov–Apr) + ETc layer.\n\n"
+        "  • PET forecasted with SARIMAX\n"
+        "  • CWR = Kc × PET  (FAO-56)\n"
+        "  • IWR = max(CWR − Peff, 0)  (FAO-56)\n"
+        "  • ETc added as map layer\n"
+        "  • Calendar shows Nov–Apr only, last 5 seasons\n"
     ),
 )
 
@@ -1038,10 +1196,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# app.include_router(graph_router, prefix="/api/graph", tags=["graphs"])
 app.include_router(graph_router)
-
-
 
 from config import STUDY_AREA, EXACT_BOUNDARY
 
@@ -1052,56 +1207,159 @@ class ChatRequest(BaseModel):
     lon: Optional[float] = None
     history: Optional[List[Dict]] = None
 
+# ═══════════════════════════════════════════════════════════════════════════
+# PIXEL TIMESERIES  ── paste this block into main.py
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# WHERE TO PASTE:
+#   Place the constant + loader below the existing PARAMS / _SRC / _VALID
+#   block (around line 95), and place the @app.get endpoint just before
+#   the existing /api/chat endpoint.
+#
+# ─────────────────────────────────────────────────────────────────────────
+# 1.  Constants & lazy loader  (add near the top-level constants, ~line 95)
+# ─────────────────────────────────────────────────────────────────────────
+
+PARQUET_DIR = Path("pixel_parquet")
+
+_PIXEL_MASTER: Optional[pd.DataFrame] = None
+
+
+def _get_pixel_master() -> Optional[pd.DataFrame]:
+    """
+    Lazily load pixel_master.parquet once and cache it.
+    Returns None if the file doesn't exist yet
+    (extract_raster_pixels.py hasn't been run).
+    """
+    global _PIXEL_MASTER
+    if _PIXEL_MASTER is not None:
+        return _PIXEL_MASTER
+
+    master_path = PARQUET_DIR / "pixel_master.parquet"
+    if not master_path.exists():
+        logger.warning(
+            "pixel_master.parquet not found – "
+            "run extract_raster_pixels.py first"
+        )
+        return None
+
+    try:
+        _PIXEL_MASTER = pd.read_parquet(master_path)
+        logger.info(
+            f"Pixel master loaded: {len(_PIXEL_MASTER):,} pixels"
+        )
+    except Exception as e:
+        logger.error(f"Failed to load pixel_master.parquet: {e}")
+        return None
+
+    return _PIXEL_MASTER
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 2.  Endpoint  (add just before the existing @app.post("/api/chat") route)
+# ─────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/pixel-timeseries")
+def get_pixel_timeseries(
+    lat: float = Query(..., description="Latitude of the clicked point"),
+    lon: float = Query(..., description="Longitude of the clicked point"),
+):
+    """
+    Return the full historical time-series for the pixel nearest to (lat, lon).
+
+    The response contains one list per raster type (savi/kc/cwr/iwr/etc).
+    Each list is sorted by date and contains { date, value } objects.
+
+    This reads directly from the pixel_parquet/ files written by
+    extract_raster_pixels.py — much faster than re-sampling the TIFFs.
+    """
+
+    # ── 1. Find nearest pixel ────────────────────────────────────────────
+    master = _get_pixel_master()
+    if master is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Pixel master not available. "
+                "Run extract_raster_pixels.py to build the parquet cache."
+            ),
+        )
+
+    # Squared Euclidean distance (fast; no trig needed for small areas)
+    dist = (master["latitude"] - lat) ** 2 + (master["longitude"] - lon) ** 2
+    nearest = master.loc[dist.idxmin()]
+    pixel_id: str = str(nearest["pixel_id"])
+
+    logger.debug(
+        f"[pixel-ts] query=({lat:.5f},{lon:.5f}) "
+        f"→ pixel={pixel_id} "
+        f"({nearest['latitude']:.5f},{nearest['longitude']:.5f})"
+    )
+
+    # ── 2. Read timeseries for each raster type ──────────────────────────
+    raster_types = ["savi", "kc", "cwr", "iwr", "etc"]
+    result: Dict[str, list] = {}
+
+    for rtype in raster_types:
+
+        # Each individual date was saved as  <rtype>_<YYYYMMDD>.parquet
+        parquet_files = sorted(PARQUET_DIR.glob(f"{rtype}_*.parquet"))
+
+        all_chunks: List[pd.DataFrame] = []
+
+        for pq in parquet_files:
+            try:
+                df = pd.read_parquet(
+                    pq,
+                    filters=[("pixel_id", "==", pixel_id)],
+                    columns=["date", "value"],
+                )
+                if not df.empty:
+                    all_chunks.append(df)
+            except Exception as e:
+                logger.warning(f"[pixel-ts] skip {pq.name}: {e}")
+
+        if all_chunks:
+            combined = (
+                pd.concat(all_chunks, ignore_index=True)
+                .drop_duplicates(subset=["date"])
+                .sort_values("date")
+            )
+            # Serialise to list-of-dicts: [{"date": "2021-11-02", "value": 0.45}, …]
+            result[rtype] = combined[["date", "value"]].to_dict(orient="records")
+        else:
+            result[rtype] = []
+
+    # ── 3. Return ─────────────────────────────────────────────────────────
+    return {
+        "pixel_id":  pixel_id,
+        "latitude":  float(nearest["latitude"]),
+        "longitude": float(nearest["longitude"]),
+        "timeseries": result,
+    }
+
+
 @app.get("/api/boundary")
 async def get_boundary():
-    """
-    Return the study-area boundary for Udham Singh Nagar.
-    Used by MapView to fit the Leaflet map bounds.
-    Guaranteed to return valid, non-empty bounds.
-    """
     bounds = EXACT_BOUNDARY.get("bounds") or STUDY_AREA.get("bounds")
-
-    # Validate — Leaflet needs north > south and east > west
     if not bounds or not all(k in bounds for k in ("north", "south", "east", "west")):
-        # Hard-coded fallback so the map never breaks
-        bounds = {
-            "north": 29.4400,
-            "south": 28.8900,
-            "west":  78.8800,
-            "east":  80.1040,
-        }
+        bounds = {"north": 29.4400, "south": 28.8900, "west": 78.8800, "east": 80.1040}
 
-    north = bounds["north"]
-    south = bounds["south"]
-    east  = bounds["east"]
-    west  = bounds["west"]
-
-    # Swap silently if they are inverted
-    if north < south:
-        north, south = south, north
-    if east < west:
-        east, west = west, east
-
-    # Minimum span guard — prevents zero-area bounds crash in Leaflet
-    if (north - south) < 0.01:
-        north += 0.05
-        south -= 0.05
-    if (east - west) < 0.01:
-        east += 0.05
-        west -= 0.05
+    north, south, east, west = bounds["north"], bounds["south"], bounds["east"], bounds["west"]
+    if north < south: north, south = south, north
+    if east < west:   east, west   = west, east
+    if (north - south) < 0.01: north += 0.05; south -= 0.05
+    if (east - west) < 0.01:   east  += 0.05; west  -= 0.05
 
     return {
-        "name":    STUDY_AREA.get("name", "Udham Singh Nagar"),
-        "state":   STUDY_AREA.get("state", "Uttarakhand"),
-        "crs":     STUDY_AREA.get("crs", "EPSG:4326"),
-        "source":  STUDY_AREA.get("boundary_source", "static-fallback"),
+        "name":   STUDY_AREA.get("name", "Udham Singh Nagar"),
+        "state":  STUDY_AREA.get("state", "Uttarakhand"),
+        "crs":    STUDY_AREA.get("crs", "EPSG:4326"),
+        "source": STUDY_AREA.get("boundary_source", "static-fallback"),
         "bounds": {
-            "north": round(north, 6),
-            "south": round(south, 6),
-            "east":  round(east,  6),
-            "west":  round(west,  6),
+            "north": round(north, 6), "south": round(south, 6),
+            "east":  round(east,  6), "west":  round(west,  6),
         },
-        # Leaflet fitBounds expects [[south, west], [north, east]]
         "leaflet_bounds": [
             [round(south, 6), round(west, 6)],
             [round(north, 6), round(east, 6)],
@@ -1114,80 +1372,117 @@ async def get_boundary():
     }
 
 
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
+@app.get("/api/history")
+async def get_history():
     """
-    RAG-powered chatbot endpoint.
-    Retrieves domain knowledge chunks, fetches live irrigation data,
-    then generates an answer via Gemini API with fallback behavior.
+    Return observed and forecast means for all history slots.
+
+    Calendar-aware response:
+      • Only Nov–Apr dates from the last MAX_SEASONS seasons
+      • Each slot carries: date, season_id, slot, obs_means, forecast_means
+      • Extra metadata for the frontend calendar (season list, filter helpers)
     """
-    query = req.query.strip()
-    if not query:
-        return {
-            "answer": "Please ask a question about irrigation, crop water requirements, or the study region.",
-            "sources": [],
-            "live_data": {},
+    dates = _latest_n_complete_dates()
+    if not dates:
+        raise HTTPException(status_code=404, detail="No processed Sentinel scenes found")
+
+    result = []
+    n = len(dates)
+
+    for idx, d in enumerate(dates):
+        slot      = slot_for_index(idx)
+        obs_means = {}
+        fc_means  = {}
+
+        for param in PARAMS:
+            path = history_path(param, slot)
+            if path.exists():
+                with rasterio.open(path) as src:
+                    tags = src.tags()
+                mean_str         = tags.get("mean")
+                obs_means[param] = (
+                    float(mean_str)
+                    if mean_str and mean_str not in ("None", "nan", "")
+                    else None
+                )
+            else:
+                obs_means[param] = None
+
+            fc_means[param] = {}
+            if param in FC_PARAMS:
+                for w in FORECAST_WINDOWS:
+                    fpath = forecast_path(param, slot, w)
+                    if fpath.exists():
+                        with rasterio.open(fpath) as src:
+                            tags = src.tags()
+                        fc_str              = tags.get("forecast_mean")
+                        fc_means[param][w]  = (
+                            float(fc_str)
+                            if fc_str and fc_str not in ("None", "nan", "")
+                            else None
+                        )
+                    else:
+                        fc_means[param][w] = None
+
+        season_id = get_season_id(d) or ""
+
+        result.append({
+            "slot":           slot,
+            "date":           str(d.date()),
+            "season":         season_id,
+            "month":          d.month,
+            "year":           d.year,
+            "is_latest":      idx == 0,
+            "obs_means":      obs_means,
+            "forecast_means": fc_means,
+        })
+
+    # Build season summary for frontend filter UI
+    seasons_present = {}
+    for item in result:
+        sid = item["season"]
+        if sid not in seasons_present:
+            seasons_present[sid] = {"season": sid, "count": 0, "months": set()}
+        seasons_present[sid]["count"] += 1
+        seasons_present[sid]["months"].add(item["month"])
+
+    seasons_list = [
+        {
+            "season": v["season"],
+            "count":  v["count"],
+            "months": sorted(v["months"]),
         }
-
-    live_data: Dict[str, object] = {}
-    try:
-        dates = _latest_n_complete_dates(1)
-        if dates:
-            for param in ("savi", "kc", "cwr", "iwr"):
-                val = _read_mean(history_path(param, "today"))
-                if val is not None:
-                    live_data[param] = round(val, 3)
-
-            if req.lat is not None and req.lon is not None:
-                live_data["query_location"] = f"lat={req.lat:.4f}, lon={req.lon:.4f}"
-                for param in ("savi", "kc", "cwr", "iwr"):
-                    p = history_path(param, "today")
-                    if not p.exists():
-                        continue
-                    try:
-                        with rasterio.open(p) as src:
-                            val = list(src.sample([(req.lon, req.lat)]))[0][0]
-                        if val != NODATA:
-                            live_data[f"point_{param}"] = round(float(val), 3)
-                    except Exception:
-                        logger.debug("[chat] failed point sample for %s", param, exc_info=True)
-    except Exception as e:
-        logger.warning(f"[chat] live data fetch failed: {e}")
-
-    try:
-        from rag_kb import get_chat_answer
-
-        rag_response = get_chat_answer(
-            query,
-            live_data=live_data or None,
-            history=req.history or [],
-        )
-        answer = rag_response.get("answer") or "I could not generate an answer right now."
-        source_ids = rag_response.get("sources", [])
-    except Exception as e:
-        logger.error(f"[chat] LangChain RAG failed: {e}", exc_info=True)
-        from rag_kb import fallback_answer
-
-        answer = fallback_answer(query)
-        source_ids = []
+        for v in sorted(seasons_present.values(), key=lambda x: x["season"], reverse=True)
+    ]
 
     return {
-        "answer": answer,
-        "sources": source_ids,
-        "live_data": live_data,
+        "n_slots":        n,
+        "max_seasons":    MAX_SEASONS,
+        "season_months":  sorted(SEASON_MONTHS),   # [1,2,3,4,11,12]
+        "allowed_seasons": get_allowed_season_ids(),
+        "seasons":        seasons_list,
+        "units":          "mm_per_day",
+        "model":          "PET-SARIMAX + Physics CWR/IWR",
+        "params":         PARAMS,
+        "slots":          result,
     }
 
 
+@app.get("/api/seasons")
+async def get_seasons():
+    """
+    Lightweight endpoint: returns allowed season IDs and which are present in data.
+    Used by the frontend calendar filter.
+    """
+    allowed = get_allowed_season_ids()
+    dates   = _latest_n_complete_dates()
+    present = set(get_season_id(d) for d in dates if get_season_id(d))
 
-
-# ── Endpoints ──────────────────────────────────────────────────────────────
-
-@app.get("/health")
-async def health():
     return {
-        "status":  "ok",
-        "version": "9.0.0",
-        "model":   "PET-SARIMAX + Physics CWR/IWR",
+        "allowed_seasons": allowed,
+        "present_seasons": sorted(present, reverse=True),
+        "max_seasons":     MAX_SEASONS,
+        "season_months":   sorted(SEASON_MONTHS),
     }
 
 
@@ -1196,12 +1491,6 @@ async def get_forecast(
     date: str = Query(..., description="Reference date YYYY-MM-DD"),
     days: int  = Query(15,  ge=1, le=30, description="Forecast horizon (days)"),
 ):
-    """
-    Generate a multi-day CWR + IWR forecast.
-
-    Forecast chain:
-      PET (SARIMAX) → CWR = Kc × PET → IWR = max(CWR − Peff, 0)
-    """
     try:
         ref_date = datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
@@ -1214,18 +1503,14 @@ async def get_forecast(
     result: dict = {
         "reference_date": date,
         "forecast_days":  days,
-        "model":          "PET-SARIMAX + Physics CWR/IWR (v9.0)",
-        "forecast_chain": "PET(SARIMAX) → CWR=Kc×PET → IWR=max(CWR-Peff,0)",
+        "model":          "PET-SARIMAX + Physics CWR/IWR (v10.0)",
         "forecasts":      {},
     }
 
     units_by_param = {
-        "savi": "unitless",
-        "kc": "unitless",
-        "pet": "mm_per_day",
-        "cwr": "mm_per_day",
-        "iwr": "mm_per_day",
-        "peff": "mm_per_day",
+        "savi": "unitless", "kc": "unitless",
+        "pet": "mm_per_day", "cwr": "mm_per_day",
+        "iwr": "mm_per_day", "peff": "mm_per_day",
     }
 
     for param in ("savi", "pet", "kc", "cwr", "iwr", "peff"):
@@ -1241,27 +1526,19 @@ async def get_forecast(
             }
 
     result["crop_stages"] = [
-        {
-            "date": d.strftime("%Y-%m-%d"),
-            **get_wheat_stage_info(d.to_pydatetime()),
-        }
+        {"date": d.strftime("%Y-%m-%d"), **get_wheat_stage_info(d.to_pydatetime())}
         for d in forecasts["kc"].index
     ]
 
+    WINDOW_SLICES = {"5day": (0, 5), "10day": (0, 10), "15day": (0, 15)}
     result["window_summaries"] = {}
-    WINDOW_SLICES = {
-        "5day": (0, 5),    # days 1-5
-        "10day": (0, 10),  # days 1-10 (cumulative)
-        "15day": (0, 15),  # days 1-15 (cumulative)
-    }
-
     for window, (start_idx, end_idx) in WINDOW_SLICES.items():
         result["window_summaries"][window] = {}
         for param in ("kc", "cwr", "iwr", "peff"):
             if param in forecasts:
                 vals = forecasts[param].iloc[start_idx:end_idx].values
                 result["window_summaries"][window][param] = {
-                    "mean": round(float(np.mean(vals)), 4),
+                    "mean":  round(float(np.mean(vals)), 4),
                     "total": round(float(np.sum(vals)), 4),
                 }
         window_date = forecasts["kc"].index[start_idx].to_pydatetime()
@@ -1270,94 +1547,35 @@ async def get_forecast(
     return result
 
 
-@app.get("/api/history")
-async def get_history():
-    """Return observed and forecast means for all history slots."""
-    dates = _latest_n_complete_dates()
-    if not dates:
-        raise HTTPException(status_code=404, detail="No processed Sentinel scenes found")
-
-    result = []
-    for idx, d in enumerate(dates):
-        slot      = slot_for_index(idx)
-        obs_means = {}
-        fc_means  = {}
-
-        for param in PARAMS:
-            path = history_path(param, slot)
-            if path.exists():
-                with rasterio.open(path) as src:
-                    tags = src.tags()
-                mean_str        = tags.get("mean")
-                obs_means[param] = (
-                    float(mean_str)
-                    if mean_str and mean_str not in ("None", "nan", "")
-                    else None
-                )
-            else:
-                obs_means[param] = None
-
-            fc_means[param] = {}
-            for w in FORECAST_WINDOWS:
-                fpath = forecast_path(param, slot, w)
-                if fpath.exists():
-                    with rasterio.open(fpath) as src:
-                        tags = src.tags()
-                    fc_str              = tags.get("forecast_mean")
-                    fc_means[param][w]  = (
-                        float(fc_str)
-                        if fc_str and fc_str not in ("None", "nan", "")
-                        else None
-                    )
-                else:
-                    fc_means[param][w] = None
-
-        result.append({
-            "slot":           slot,
-            "date":           str(d.date()),
-            "is_latest":      idx == 0,
-            "obs_means":      obs_means,
-            "forecast_means": fc_means,
-        })
-
-    return {
-        "n_slots": len(result),
-        "units":   "mm_per_day",
-        "model":   "PET-SARIMAX + Physics CWR/IWR",
-        "slots":   result,
-    }
-
-
 @app.get("/api/point")
 def get_point(
     lat:  float,
     lon:  float,
     slot: Optional[str] = None,
 ):
-    """Point query — returns observed and forecast values at (lat, lon)."""
     if not slot:
         slot = "today"
 
     result   = {}
     forecast = {}
 
-    for param in ("savi", "kc", "cwr", "iwr"):
+    for param in PARAMS:
         path = history_path(param, slot)
         if path.exists():
             with rasterio.open(path) as src:
                 val = list(src.sample([(lon, lat)]))[0][0]
                 result[param] = None if val == NODATA else float(val)
 
-        if param in ("kc", "cwr", "iwr"):
-            forecast[param] = {}
-            for w in FORECAST_WINDOWS:
-                fpath = forecast_path(param, slot, w)
-                if fpath.exists():
-                    with rasterio.open(fpath) as src:
-                        val = list(src.sample([(lon, lat)]))[0][0]
-                        forecast[param][w] = None if val == NODATA else float(val)
-                else:
-                    forecast[param][w] = None
+    for param in FC_PARAMS:
+        forecast[param] = {}
+        for w in FORECAST_WINDOWS:
+            fpath = forecast_path(param, slot, w)
+            if fpath.exists():
+                with rasterio.open(fpath) as src:
+                    val = list(src.sample([(lon, lat)]))[0][0]
+                    forecast[param][w] = None if val == NODATA else float(val)
+            else:
+                forecast[param][w] = None
 
     return {
         "lat":              lat,
@@ -1367,93 +1585,182 @@ def get_point(
         "forecast":         forecast,
     }
 
+
+
 # @app.get("/api/point")
 # def get_point(
 #     lat: float,
 #     lon: float,
 #     slot: Optional[str] = None,
+#     forecast_days: int = 15,
 # ):
 #     if not slot:
 #         slot = "today"
 
 #     result = {}
-#     forecast = {}
-#     forecast_daily = {}
 
-#     # observed values
-#     for param in ("savi", "kc", "cwr", "iwr"):
+#     # =====================================================
+#     # GET HISTORICAL VALUES FROM RASTER
+#     # =====================================================
+
+#     for param in PARAMS:
+
 #         path = history_path(param, slot)
 
 #         if path.exists():
+
 #             with rasterio.open(path) as src:
+
 #                 val = list(src.sample([(lon, lat)]))[0][0]
-#                 result[param] = None if val == NODATA else float(val)
 
-#     # old forecast window values (keep UI safe)
-#     for param in ("kc", "cwr", "iwr"):
-#         forecast[param] = {}
+#                 result[param] = (
+#                     None if val == NODATA else round(float(val), 4)
+#                 )
 
-#         for w in FORECAST_WINDOWS:
-#             fpath = forecast_path(param, slot, w)
+#         else:
+#             result[param] = None
 
-#             if fpath.exists():
-#                 with rasterio.open(fpath) as src:
-#                     val = list(src.sample([(lon, lat)]))[0][0]
-#                     forecast[param][w] = None if val == NODATA else float(val)
-#             else:
-#                 forecast[param][w] = None
+#     # =====================================================
+#     # GET ACTUAL DATE OF SLOT
+#     # =====================================================
 
-#     # NEW DAILY FORECAST
-#     dates = _latest_n_complete_dates(1)
-#     ref_date = dates[0] if dates else datetime.today()
+#     dates = _latest_n_complete_dates(HISTORY_DATES)
 
-#     fc = generate_forecast_for_date(ref_date, 15)
+#     slot_index = 0 if slot == "today" else int(slot)
 
-#     forecast_daily["dates"] = [
-#         d.strftime("%Y-%m-%d") for d in fc["kc"].index
-#     ]
+#     if slot_index >= len(dates):
 
-#     for param in ("kc", "cwr", "iwr"):
-#         forecast_daily[param] = [
-#             round(float(v), 4)
-#             for v in fc[param].values
-#         ]
+#         raise HTTPException(
+#             status_code=404,
+#             detail="Invalid slot"
+#         )
+
+#     reference_date = dates[slot_index]
+
+#     # =====================================================
+#     # GENERATE DAILY FORECAST
+#     # =====================================================
+
+#     forecasts = generate_forecast_for_date(
+#         reference_date,
+#         forecast_days
+#     )
+
+#     daily_forecast = {}
+
+#     for param in FC_PARAMS:
+
+#         if param not in forecasts:
+#             continue
+
+#         series = forecasts[param]
+
+#         daily_forecast[param] = []
+
+#         for date_obj, value in zip(series.index, series.values):
+
+#             daily_forecast[param].append({
+#                 "date": date_obj.strftime("%Y-%m-%d"),
+#                 "value": round(float(value), 4)
+#             })
+
+#     # =====================================================
+#     # RETURN RESPONSE
+#     # =====================================================
 
 #     return {
+
 #         "lat": lat,
 #         "lon": lon,
-#         "acquisition_date": slot,
-#         "values": result,
-#         "forecast": forecast,
-#         "forecast_daily": forecast_daily
+
+#         "slot": slot,
+
+#         "reference_date": reference_date.strftime("%Y-%m-%d"),
+
+#         "current_values": result,
+
+#         "daily_forecast": daily_forecast,
 #     }
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    query = req.query.strip()
+    if not query:
+        return {
+            "answer": "Please ask a question about irrigation, crop water requirements, or the study region.",
+            "sources": [],
+            "live_data": {},
+        }
+
+    live_data: Dict[str, object] = {}
+    try:
+        dates = _latest_n_complete_dates(1)
+        if dates:
+            for param in PARAMS:
+                val = _read_mean(history_path(param, "today"))
+                if val is not None:
+                    live_data[param] = round(val, 3)
+            if req.lat is not None and req.lon is not None:
+                live_data["query_location"] = f"lat={req.lat:.4f}, lon={req.lon:.4f}"
+                for param in PARAMS:
+                    p = history_path(param, "today")
+                    if not p.exists():
+                        continue
+                    try:
+                        with rasterio.open(p) as src:
+                            val = list(src.sample([(req.lon, req.lat)]))[0][0]
+                        if val != NODATA:
+                            live_data[f"point_{param}"] = round(float(val), 3)
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.warning(f"[chat] live data fetch failed: {e}")
+
+    try:
+        from rag_kb import get_chat_answer
+        rag_response = get_chat_answer(query, live_data=live_data or None, history=req.history or [])
+        answer = rag_response.get("answer") or "I could not generate an answer right now."
+        source_ids = rag_response.get("sources", [])
+    except Exception as e:
+        logger.error(f"[chat] LangChain RAG failed: {e}", exc_info=True)
+        from rag_kb import fallback_answer
+        answer = fallback_answer(query)
+        source_ids = []
+
+    return {"answer": answer, "sources": source_ids, "live_data": live_data}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": "10.0.0", "model": "PET-SARIMAX + Physics CWR/IWR"}
+
 
 @app.post("/api/refresh")
 async def manual_refresh():
-    """Trigger a full pipeline run."""
     try:
         return {"status": "ok", "result": run_pipeline()}
     except Exception as e:
         logger.exception("Pipeline failed")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/model/info")
 async def model_info():
-    """Return metadata for all loaded models — THESIS COMPLIANT."""
     pet_model, pet_meta = _get_model("pet")
-    kc_model, kc_meta = _get_model("kc")
+    kc_model, kc_meta   = _get_model("kc")
 
     def _meta_dict(model, meta):
         if meta is None:
             return {"available": False}
         return {
             "available": model is not None,
-            "note": meta.get("note", ""),
-            "test_r2": meta["metrics"].get("R2"),
-            "test_rmse": meta["metrics"].get("RMSE"),
+            "note":     meta.get("note", ""),
+            "test_r2":  meta["metrics"].get("R2"),
+            "test_rmse":meta["metrics"].get("RMSE"),
             "test_mae": meta["metrics"].get("MAE"),
-            "order": meta.get("order"),
-            "exog_cols": meta.get("exog_cols"),
+            "order":    meta.get("order"),
+            "exog_cols":meta.get("exog_cols"),
             "last_training_date": (
                 meta["last_date"].strftime("%Y-%m-%d")
                 if meta.get("last_date") else None
@@ -1465,23 +1772,19 @@ async def model_info():
             "kc":  _meta_dict(kc_model,  kc_meta),
             "pet": _meta_dict(pet_model, pet_meta),
         },
-        "forecast_chain": {
-            "step1": "Kc forecast: SARIMA(1,1,1)(1,1,1,12) on Kc time series",
-            "step2": "PET forecast: SARIMA(1,1,1)(1,1,1,12) — NO SAVI (purely meteorological)",
-            "step3": "CWR = Kc × PET  (FAO-56 Eq. 4)",
-            "step4": "IWR = max(CWR − Peff, 0)  (FAO-56 §4.5)",
-        },
+        "history_slots":       HISTORY_DATES,
+        "max_seasons":         MAX_SEASONS,
+        "season_months":       sorted(SEASON_MONTHS),
+        "allowed_seasons":     get_allowed_season_ids(),
+        "thesis_reference":    "Satabdi Mandal, 2025, IIRS-ISRO, §4.6, §5.6",
         "physical_relationships": {
             "savi_to_kc": f"Kc = {KC_SLOPE:.4f} × SAVI + {KC_INTERCEPT:.4f}  (thesis Table 9)",
-            "kc_to_savi": f"SAVI = (Kc − {KC_INTERCEPT:.4f}) / {KC_SLOPE:.4f}  (inverse)",
             "cwr":        "CWR = Kc × PET  (FAO-56)",
             "iwr":        "IWR = max(CWR − Peff, 0)  (FAO-56)",
-            "peff":       "Peff from INSAT rainfall via FAO-56 formula",
         },
         "crop_stage_today": get_wheat_stage_info(datetime.utcnow()),
-        "history_slots": HISTORY_DATES,
-        "thesis_reference": "Satabdi Mandal, 2025, IIRS-ISRO, §4.6, §5.6",
     }
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT
@@ -1491,8 +1794,8 @@ def main():
     setup_logging()
     logger.info("=" * 65)
     logger.info("Irrigation Monitoring System v10.0 starting …")
-    logger.info("Forecast: PET(SARIMAX trained) → CWR=Kc×PET → IWR=max(CWR-Peff,0)")
-    logger.info("Stage-aware Kc: SAVI-physics (day-weighted) + FAO-56 crop stage blend")
+    logger.info(f"Seasonal cap: {MAX_SEASONS} seasons | Months: Nov–Apr")
+    logger.info(f"Allowed seasons: {get_allowed_season_ids()}")
     logger.info("=" * 65)
 
     _get_wheat_mask()
@@ -1502,11 +1805,6 @@ def main():
         logger.info(f"✓ PET model ready (R²={pet_meta['metrics']['R2']:.4f})")
     else:
         logger.error("✗ Failed to initialise PET model")
-
-    logger.info(
-        f"SAVI→Kc chain: Kc = {KC_SLOPE}×SAVI + {KC_INTERCEPT} "
-        f"(no SAVI SARIMAX — using trend+climatology blend)"
-    )
 
     run_pipeline()
 
@@ -1521,9 +1819,7 @@ def main():
         logger.info("✓ Scheduler + Watchdog started")
     except Exception as e:
         logger.error(f"✗ Scheduler failed to start: {e}", exc_info=True)
-        logger.warning(
-            "Continuing without scheduler — pipeline will NOT run automatically."
-        )
+        logger.warning("Continuing without scheduler — pipeline will NOT run automatically.")
 
     uvicorn.run(
         app, host="0.0.0.0", port=8000,

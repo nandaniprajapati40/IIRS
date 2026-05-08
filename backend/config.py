@@ -280,7 +280,7 @@ SARIMAX_CONFIG = {
 # GEOSERVER CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 GEOSERVER = {
-    "url":       os.getenv("GEOSERVER_URL",      "http://localhost:8080/geoserver"),
+    "url":       os.getenv("GEOSERVER_URL",      "http://192.168.17.28:8080/geoserver"),
     "workspace": os.getenv("GEOSERVER_WORKSPACE", "irrigation"),
     "username":  os.getenv("GEOSERVER_USER",      "admin"),
     "password":  os.getenv("GEOSERVER_PASS",      "geoserver"),
