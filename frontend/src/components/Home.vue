@@ -17,7 +17,7 @@
     <header class="app-header">
       <div class="app-header-inner">
         <div class="header-logos">
-          <img src="/assets/iirs.png" class="iirs-logo" onerror="this.style.display='none'" />
+          <img src="/assets/logo1.png" class="iirs-logo" onerror="this.style.display='none'" />
           <img src="/assets/isro.png" class="iirs-logo" onerror="this.style.display='none'" />
         </div>
         <div class="header-center">
@@ -26,6 +26,7 @@
           <h4>भारत सरकार / Government of India</h4>
         </div>
         <div class="header-logos header-logos-right">
+           <img src="/assets/iirs.png" class="iirs-logo" onerror="this.style.display='none'" />
           <img src="/assets/india.png" class="gov-logo" onerror="this.style.display='none'" />
         </div>
       </div>
@@ -34,9 +35,11 @@
     <!-- ══════════════════ NAV ══════════════════ -->
     <nav class="nav-bar">
       <div class="nav-inner">
+        
         <div class="nav-links">
           <a href="#about"  class="nav-link" @click.prevent="scrollTo('about')">About</a>
           <a href="#region" class="nav-link" @click.prevent="scrollTo('region')">Study Region</a>
+          <a href="#docs"   class="nav-link" @click.prevent="$emit('docs')">Docs</a>
           <a href="#faqs"   class="nav-link" @click.prevent="$emit('faqs')">FAQs</a>
         </div>
         <button class="mobile-menu-btn" @click="mobileOpen = !mobileOpen">
@@ -47,7 +50,7 @@
         <a href="#about"  class="mobile-link" @click.prevent="scrollTo('about');  mobileOpen=false">About</a>
         <a href="#why"    class="mobile-link" @click.prevent="scrollTo('why');    mobileOpen=false">Why AquaWatch</a>
         <a href="#region" class="mobile-link" @click.prevent="scrollTo('region'); mobileOpen=false">Study Region</a>
-        <a class="mobile-link" @click.prevent="$emit('faqs'); mobileOpen=false" style="cursor:pointer">FAQs</a>
+        <a class="mobile-link" @click.prevent="$emit('docs'); mobileOpen=false" style="cursor:pointer">DOCs</a>
         <button @click="$emit('launch'); mobileOpen=false" class="mobile-launch">🛰️ Launch Dashboard</button>
         <button @click="$emit('toggle-theme')" class="mobile-theme">{{ isDark ? '☀️ Light Mode' : '🌙 Dark Mode' }}</button>
       </div>
@@ -73,11 +76,11 @@
           Rabi Season Active · Udham Singh Nagar, Uttarakhand
         </div>
         <h1 class="hero-title fade-up" style="animation-delay:.2s">
-          CROP WAT<span class="title-accent">ER REQUIREMENTS</span>
-          <span class="title-sub">Irrigation water requirements</span>
+          JAL<span class="title-accent">DRISHTI</span>
+          <span class="title-sub">Crop Irrigation water requirements</span>
         </h1>
         <p class="hero-desc fade-up" style="animation-delay:.35s">
-          Satellite-driven crop water monitoring for <strong>Rabi wheat</strong>
+          <strong>Rabi wheat crop </strong>
         </p>
         <div class="hero-cta-row fade-up" style="animation-delay:.5s">
           <button @click="$emit('launch')" class="ss-cta">Open Map →</button>
@@ -137,7 +140,7 @@
     <footer class="site-footer">
       <div class="footer-inner">
         <div class="footer-brand">
-          <span>🌾</span>
+          <span></span>
           <div>
             <p class="fb-name">&nbsp;·&nbsp; Irrigation Water Requirements</p>
             <p class="fb-sub">ISRO &nbsp;·&nbsp; IIRS &nbsp;·&nbsp; Department of Space, Govt. of India</p>
@@ -271,7 +274,7 @@ import { ref, nextTick } from 'vue'
 const props = defineProps({
   isDark: { type: Boolean, default: true }
 })
-defineEmits(['launch', 'faqs', 'toggle-theme'])
+defineEmits(['launch', 'docs', 'toggle-theme'])
 const mobileOpen = ref(false)
 
 function scrollTo(id) {

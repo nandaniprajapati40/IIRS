@@ -89,15 +89,29 @@
             </div>
           </template>
 
-          <!-- 5/10/15-day forecast — CWR / IWR -->
+          <!-- 5/10/15-day forecast — CWR / IWR (cumulative totals mm) -->
           <template v-if="forecastData && (layer.name === 'cwr' || layer.name === 'iwr')">
             <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]">
-              <span class="fc-label">{{ w[1] }} ahead</span>
+              <span class="fc-label">{{ w[1] }} total</span>
               <span v-if="forecastData?.[layer.name]?.[w[0]] != null"
                     class="value"
-                    :style="getValueStyle(layer.name, forecastData[layer.name][w[0]])">
+                    :style="getValueStyle(layer.name, forecastData[layer.name][w[0]], true)">
                 {{ format(forecastData[layer.name][w[0]]) }}
-                <em class="unit">{{ layer.name === 'cwr' || layer.name === 'iwr' ? 'mm' : '' }}</em>
+                <em class="unit">mm</em>
+              </span>
+              <span v-else class="nodata-chip">—</span>
+            </div>
+          </template>
+
+          <!-- 5/10/15-day forecast — ETc (daily average mm/day) -->
+          <template v-if="forecastData && layer.name === 'etc'">
+            <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]">
+              <span class="fc-label">{{ w[1] }} avg</span>
+              <span v-if="forecastData?.etc?.[w[0]] != null"
+                    class="value"
+                    :style="getValueStyle('etc', forecastData.etc[w[0]])">
+                {{ format(forecastData.etc[w[0]]) }}
+                <em class="unit">mm/day</em>
               </span>
               <span v-else class="nodata-chip">—</span>
             </div>
@@ -188,6 +202,55 @@
         </p>
       </div>
     </div>
+
+
+
+
+     <!-- ── Pixel Trend Modal ─────────────────────────────────────────── -->
+    <Transition name="modal-fade">
+      <div class="pixel-modal-backdrop" v-if="showPixelModal" @click.self="showPixelModal = false">
+        <div class="pixel-modal">
+ 
+          <!-- Modal Header -->
+          <div class="pixel-modal-header">
+            <div class="modal-title-row">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.2" class="modal-icon">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+              <span class="modal-title">Pixel Trend Analysis</span>
+            </div>
+            <button class="modal-close-btn" @click="showPixelModal = false" aria-label="Close">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.5">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+ 
+          <!-- Loading state (while API call is in flight) -->
+          <div v-if="pixelTimeSeriesLoading" class="pixel-modal-loading">
+            <div class="pts-spinner"></div>
+            <span>Loading historical pixel data…</span>
+          </div>
+ 
+          <!-- Error state -->
+          <div v-else-if="pixelTimeSeriesError" class="pixel-modal-error">
+            ⚠ {{ pixelTimeSeriesError }}
+          </div>
+ 
+          <!-- Chart -->
+          <PixelChart
+            v-else
+            :pixelData="pixelTimeSeries"
+            :initialLayer="activeLayers[0]?.name || 'savi'"
+            class="pixel-modal-chart"
+          />
+ 
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -196,12 +259,39 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import DataChart from './DataChart.vue'
+import PixelChart from './PixelChart.vue'
+const pixelTimeSeries         = ref(null)   // /api/pixel-timeseries response
+const showPixelModal          = ref(false)
+const pixelTimeSeriesLoading  = ref(false)
+const pixelTimeSeriesError    = ref(null)
+async function fetchPixelTimeSeries(lat, lon) {
+  pixelTimeSeriesLoading.value = true
+  pixelTimeSeriesError.value   = null
+  pixelTimeSeries.value        = null
+ 
+  try {
+    const res = await fetch(
+      `http://localhost:8000/api/pixel-timeseries?lat=${lat}&lon=${lon}`
+    )
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.detail || `HTTP ${res.status}`)
+    }
+    pixelTimeSeries.value = await res.json()
+  } catch (err) {
+    console.error('[pixel-ts] fetch error:', err)
+    pixelTimeSeriesError.value = err.message || 'Failed to load pixel timeseries'
+  } finally {
+    pixelTimeSeriesLoading.value = false
+  }
+}
+ 
 
 // DEFINE PROPS - THIS WAS MISSING!
 const props = defineProps({
   layers: {
     type: Object,
-    default: () => ({ savi: false, kc: false, cwr: false, iwr: false })
+    default: () => ({ savi: false, kc: false, etc: false, cwr: false, iwr: false })
   },
   forecastDays: {
     type: String,
@@ -310,14 +400,15 @@ const mapStyles = [
 ]
 
 // GeoServer configuration
-const GEOSERVER_URL = 'http://localhost:8080/geoserver'
+const GEOSERVER_URL = 'http://192.168.17.28:8080/geoserver'
 const WORKSPACE = 'irrigation'
 
 const layerConfigs = {
-  savi: { name: 'savi', displayName: 'SAVI', style: 'savi_style' },
-  kc: { name: 'kc', displayName: 'Kc', style: 'kc_style' },
-  cwr: { name: 'cwr', displayName: 'CWR (mm)', style: 'cwr_style' },
-  iwr: { name: 'iwr', displayName: 'IWR (mm)', style: 'iwr_style' }
+  savi: { name: 'savi', displayName: 'SAVI',        style: 'savi_style' },
+  kc:   { name: 'kc',   displayName: 'Kc',          style: 'kc_style'  },
+  cwr:  { name: 'cwr',  displayName: 'CWR (mm/day)', style: 'cwr_style' },
+  iwr:  { name: 'iwr',  displayName: 'IWR (mm/day)', style: 'iwr_style' },
+  etc:  { name: 'etc',  displayName: 'ETc (mm/day)', style: 'etc_style' },
 }
 
 // Create WMS layer - using the current slot
@@ -465,78 +556,83 @@ watch(() => props.opacity, (val) => {
   })
 })
 
-// Color mapping based on GeoServer styles
+// ── Color maps matching GeoServer SLD styles ──────────────────────────────
+// Used ONLY for the info-panel chip background colour (not for WMS tile rendering).
 const colorMaps = {
   savi: [
-    { value: -1.0, color: '#8B0000' },
-    { value: -0.8, color: '#A52A2A' },
-    { value: -0.6, color: '#CD5C5C' },
-    { value: -0.4, color: '#FF4500' },
-    { value: -0.2, color: '#FF8C00' },
-    { value: 0.0, color: '#FFA500' },
-    { value: 0.1, color: '#FFD700' },
-    { value: 0.2, color: '#FFFF00' },
-    { value: 0.3, color: '#ADFF2F' },
-    { value: 0.4, color: '#90EE90' },
-    { value: 0.5, color: '#32CD32' },
-    { value: 0.6, color: '#228B22' },
-    { value: 0.7, color: '#008000' },
-    { value: 0.8, color: '#006400' },
-    { value: 0.9, color: '#004d00' },
-    { value: 1.0, color: '#003300' }
+    { value: -1.0, color: '#8B0000' }, { value: -0.8, color: '#A52A2A' },
+    { value: -0.6, color: '#CD5C5C' }, { value: -0.4, color: '#FF4500' },
+    { value: -0.2, color: '#FF8C00' }, { value:  0.0, color: '#FFA500' },
+    { value:  0.1, color: '#FFD700' }, { value:  0.2, color: '#FFFF00' },
+    { value:  0.3, color: '#ADFF2F' }, { value:  0.4, color: '#90EE90' },
+    { value:  0.5, color: '#32CD32' }, { value:  0.6, color: '#228B22' },
+    { value:  0.7, color: '#008000' }, { value:  0.8, color: '#006400' },
+    { value:  0.9, color: '#004d00' }, { value:  1.0, color: '#003300' },
   ],
   kc: [
-    { value: 0.0, color: '#FFD700' },
-    { value: 0.1, color: '#FFD700' },
-    { value: 0.2, color: '#FFD700' },
-    { value: 0.3, color: '#DAA520' },
-    { value: 0.4, color: '#BDB76B' },
-    { value: 0.5, color: '#90EE90' },
-    { value: 0.6, color: '#90EE90' },
-    { value: 0.7, color: '#7CCD7C' },
-    { value: 0.8, color: '#32CD32' },
-    { value: 0.9, color: '#32CD32' },
-    { value: 1.0, color: '#228B22' },
-    { value: 1.1, color: '#006400' },
-    { value: 1.2, color: '#006400' },
-    { value: 1.3, color: '#556B2F' },
-    { value: 1.4, color: '#8B4513' },
-    { value: 1.5, color: '#8B4513' }
+    { value: 0.0, color: '#FFD700' }, { value: 0.1, color: '#FFD700' },
+    { value: 0.2, color: '#FFD700' }, { value: 0.3, color: '#DAA520' },
+    { value: 0.4, color: '#BDB76B' }, { value: 0.5, color: '#90EE90' },
+    { value: 0.6, color: '#90EE90' }, { value: 0.7, color: '#7CCD7C' },
+    { value: 0.8, color: '#32CD32' }, { value: 0.9, color: '#32CD32' },
+    { value: 1.0, color: '#228B22' }, { value: 1.1, color: '#006400' },
+    { value: 1.2, color: '#006400' }, { value: 1.3, color: '#556B2F' },
+    { value: 1.4, color: '#8B4513' }, { value: 1.5, color: '#8B4513' },
   ],
+  // CWR observed (mm/day) — matches cwr_style SLD (0–10 range)
   cwr: [
-    { value: 0, color: '#FF4444' },
-    { value: 1, color: '#FF4444' },
-    { value: 2, color: '#FF6346' },
-    { value: 3, color: '#FFA500' },
-    { value: 4, color: '#FFA500' },
-    { value: 4.5, color: '#FFFF00' },
-    { value: 5, color: '#ADFF2F' },
-    { value: 5.5, color: '#90EE90' },
-    { value: 6, color: '#00CED1' },
-    { value: 6.5, color: '#1E90FF' },
-    { value: 7, color: '#1E90FF' },
-    { value: 7.5, color: '#1E90FF' },
-    { value: 8, color: '#0000CD' },
-    { value: 8.5, color: '#00008B' },
-    { value: 9, color: '#00008B' },
-    { value: 9.5, color: '#4B0082' },
-    { value: 10, color: '#4B0082' }
+    { value:   0, color: '#5D4037' }, { value:   1, color: '#6D4C41' },
+    { value:   2, color: '#795548' }, { value:   3, color: '#A1887F' },
+    { value:   4, color: '#BC8F6F' }, { value: 4.5, color: '#D4AC0D' },
+    { value:   5, color: '#F1C40F' }, { value: 5.5, color: '#9CCC65' },
+    { value:   6, color: '#66BB6A' }, { value: 6.5, color: '#42A5F5' },
+    { value:   7, color: '#1E88E5' }, { value: 7.5, color: '#1565C0' },
+    { value:   8, color: '#0D47A1' }, { value: 8.5, color: '#0B3C91' },
+    { value:   9, color: '#082567' }, { value: 9.5, color: '#4A148C' },
+    { value:  10, color: '#2E0854' },
   ],
+  // IWR observed (mm/day)
   iwr: [
-    { value: 0, color: '#E0F7FA' },
-    { value: 1, color: '#B2EBF2' },
-    { value: 2, color: '#80DEEA' },
-    { value: 3, color: '#4DD0E1' },
-    { value: 4, color: '#26C6DA' },
-    { value: 5, color: '#00BCD4' },
-    { value: 6, color: '#0097A7' },
-    { value: 7, color: '#00796B' },
-    { value: 8, color: '#00695C' },
-    { value: 9, color: '#004D40' },
-    { value: 10, color: '#1A237E' }
-  ]
+    { value:  0, color: '#E0F7FA' }, { value:  1, color: '#B2EBF2' },
+    { value:  2, color: '#80DEEA' }, { value:  3, color: '#4DD0E1' },
+    { value:  4, color: '#26C6DA' }, { value:  5, color: '#00BCD4' },
+    { value:  6, color: '#0097A7' }, { value:  7, color: '#00796B' },
+    { value:  8, color: '#00695C' }, { value:  9, color: '#004D40' },
+    { value: 10, color: '#1A237E' },
+  ],
+  // ETc observed (mm/day) — matches etc_style SLD (purple→pink→cyan→blue)
+  etc: [
+    { value:   0, color: '#4A148C' }, { value:   1, color: '#6A1B9A' },
+    { value:   2, color: '#8E24AA' }, { value:   3, color: '#AB47BC' },
+    { value:   4, color: '#BA68C8' }, { value: 4.5, color: '#CE93D8' },
+    { value:   5, color: '#E1BEE7' }, { value: 5.5, color: '#B2EBF2' },
+    { value:   6, color: '#80DEEA' }, { value: 6.5, color: '#4DD0E1' },
+    { value:   7, color: '#26C6DA' }, { value: 7.5, color: '#00BCD4' },
+    { value:   8, color: '#039BE5' }, { value: 8.5, color: '#0277BD' },
+    { value:   9, color: '#01579B' }, { value: 9.5, color: '#0D47A1' },
+    { value:  10, color: '#001F54' },
+  ],
+  // ── Cumulative forecast colormaps (mm_total over window) ────────────────
+  // CWR/IWR forecast rasters store cumulative totals, not daily rates.
+  // Range: 0–150 mm (covers up to 15-day × 10 mm/day).
+  cwr_total: [
+    { value:   0, color: '#5D4037' }, { value:  10, color: '#795548' },
+    { value:  20, color: '#A1887F' }, { value:  30, color: '#D4AC0D' },
+    { value:  40, color: '#F1C40F' }, { value:  50, color: '#9CCC65' },
+    { value:  60, color: '#66BB6A' }, { value:  70, color: '#42A5F5' },
+    { value:  80, color: '#1E88E5' }, { value:  90, color: '#1565C0' },
+    { value: 100, color: '#0D47A1' }, { value: 120, color: '#4A148C' },
+    { value: 150, color: '#2E0854' },
+  ],
+  iwr_total: [
+    { value:   0, color: '#E0F7FA' }, { value:  10, color: '#B2EBF2' },
+    { value:  20, color: '#80DEEA' }, { value:  30, color: '#4DD0E1' },
+    { value:  40, color: '#26C6DA' }, { value:  50, color: '#00BCD4' },
+    { value:  60, color: '#0097A7' }, { value:  70, color: '#00796B' },
+    { value:  80, color: '#00695C' }, { value: 100, color: '#004D40' },
+    { value: 120, color: '#1A237E' }, { value: 150, color: '#0D0A3A' },
+  ],
 }
-
 // Current style object
 const currentStyle = computed(() => {
   return mapStyles.find(s => s.name === currentMapStyle.value) || mapStyles[0]
@@ -549,11 +645,14 @@ const activeLayers = computed(() => {
     .map(key => layerConfigs[key])
 })
 
-// Get color for a specific value
-function getColorForValue(layerName, value) {
+// Get color for a specific value; pass isCumulative=true for CWR/IWR forecast totals
+function getColorForValue(layerName, value, isCumulative = false) {
   if (value === undefined || value === null) return '#808080'
 
-  const colorMap = colorMaps[layerName]
+  const mapKey = isCumulative && (layerName === 'cwr' || layerName === 'iwr')
+    ? `${layerName}_total`
+    : layerName
+  const colorMap = colorMaps[mapKey]
   if (!colorMap) return '#808080'
 
   let closest = colorMap[0]
@@ -566,15 +665,13 @@ function getColorForValue(layerName, value) {
       closest = colorMap[i]
     }
   }
-
   return closest.color
 }
 
 // Get style object for value display
-function getValueStyle(layerName, value) {
-  const bgColor = getColorForValue(layerName, value)
+function getValueStyle(layerName, value, isCumulative = false) {
+  const bgColor = getColorForValue(layerName, value, isCumulative)
   const textColor = getTextColor(bgColor)
-
   return {
     backgroundColor: bgColor,
     padding: '4px 8px',
@@ -582,7 +679,7 @@ function getValueStyle(layerName, value) {
     fontWeight: 'bold',
     color: textColor,
     display: 'inline-block',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
   }
 }
 
@@ -678,9 +775,9 @@ async function loadBoundary() {
   }
 }
 
-// Unit label per layer
+// Unit label per layer (observed / daily values)
 function layerUnit(name) {
-  return { savi: '', kc: '', cwr: 'mm/day', iwr: 'mm/day' }[name] ?? ''
+  return { savi: '', kc: '', cwr: 'mm/day', iwr: 'mm/day', etc: 'mm/day' }[name] ?? ''
 }
 
 // Check if point is within boundary
@@ -777,44 +874,88 @@ async function getCurrentLocation() {
 }
 
 // Handle map click
+// Handle map click — REPLACE the existing onMapClick function with this one
 async function onMapClick(e) {
   const { lat, lng } = e.latlng
-  
+ 
+  // ── Open popup immediately with loading state ──────────────────────────
   const popup = L.popup({
     className: `custom-value-popup ${!isDarkMode.value ? 'light' : ''}`,
     closeButton: false,
     offset: [0, -10],
-    autoPan: false
+    autoPan: false,
   })
-  .setLatLng([lat, lng])
-  .setContent('<div class="popup-loading"><span>⏳</span> Fetching...</div>')
-  .openOn(map)
-
+    .setLatLng([lat, lng])
+    .setContent('<div class="popup-loading"><span>⏳</span> Fetching…</div>')
+    .openOn(map)
+ 
+  // ── Fetch point data (existing /api/point call) ────────────────────────
   await fetchPointData(lat, lng)
   emit('location-selected', { lat, lon: lng })
-
+ 
+  // ── Build popup content ───────────────────────────────────────────────
   if (pointData.value) {
-    const activeWithData = activeLayers.value.filter(l => pointData.value.values?.[l.name] != null)
-    
+    const activeWithData = activeLayers.value.filter(
+      l => pointData.value.values?.[l.name] != null
+    )
+ 
     if (activeWithData.length > 0) {
       let content = `<div class="popup-content-multi">`
+ 
       activeWithData.forEach(layer => {
         const val = pointData.value.values[layer.name]
-        const formattedVal = val.toFixed(3)
         const unit = layerUnit(layer.name)
         content += `
           <div class="popup-row">
             <span class="value-layer">${layer.displayName}:</span>
-            <span class="value-num">${formattedVal}</span>
+            <span class="value-num">${val.toFixed(3)}</span>
             <span class="value-unit">${unit}</span>
-          </div>
-        `
+          </div>`
       })
+ 
+      // ── "View Trend" button ─────────────────────────────────────────
+      content += `
+        <div class="popup-trend-row">
+          <button class="popup-trend-btn" id="pixel-trend-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.5">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            View Trend
+          </button>
+        </div>`
+ 
       content += `</div>`
       popup.setContent(content)
+ 
+      // ── Wire button click after popup renders ──────────────────────
+      popup.on('add', () => {
+        // Small delay to ensure DOM is ready
+        setTimeout(() => {
+          const btn = map.getContainer().querySelector('#pixel-trend-btn')
+          if (btn) {
+            btn.addEventListener('click', () => {
+              showPixelModal.value = true
+              // Kick off the timeseries fetch if not already loaded
+              if (
+                !pixelTimeSeries.value ||
+                Math.abs(pixelTimeSeries.value.latitude - lat) > 0.0001 ||
+                Math.abs(pixelTimeSeries.value.longitude - lng) > 0.0001
+              ) {
+                fetchPixelTimeSeries(lat, lng)
+              }
+            })
+          }
+        }, 80)
+      })
+ 
     } else {
-      popup.setContent('<div class="popup-content no-data">No layer data here</div>')
-      setTimeout(() => { if (map.hasLayer(popup)) map.closePopup(popup) }, 2000)
+      popup.setContent(
+        '<div class="popup-content no-data">No layer data here</div>'
+      )
+      setTimeout(() => {
+        if (map.hasLayer(popup)) map.closePopup(popup)
+      }, 2000)
     }
   } else {
     map.closePopup(popup)
@@ -860,6 +1001,7 @@ onMounted(() => {
   wmsLayers.kc = createWMSLayer('kc')
   wmsLayers.cwr = createWMSLayer('cwr')
   wmsLayers.iwr = createWMSLayer('iwr')
+  wmsLayers.etc = createWMSLayer('etc')
 
   loadBoundary()
   map.on('click', onMapClick)
@@ -1690,4 +1832,156 @@ defineExpose({
   font-weight: 400; 
   font-size: 0.85rem;
 } 
+
+.popup-trend-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+ 
+:global(.custom-value-popup.light .popup-trend-row) {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+ 
+:global(.popup-trend-btn) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid rgba(59, 159, 217, 0.45);
+  border-radius: 20px;
+  background: rgba(59, 159, 217, 0.12);
+  color: #3b9fd9;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  transition: background 0.18s, border-color 0.18s;
+}
+:global(.popup-trend-btn:hover) {
+  background: rgba(59, 159, 217, 0.22);
+  border-color: #3b9fd9;
+}
+ 
+/* ─── Pixel Modal ──────────────────────────────────────────────── */
+.pixel-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+ 
+.pixel-modal {
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  width: min(780px, 96vw);
+  height: min(540px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+ 
+.pixel-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid rgba(60, 60, 60, 0.08);
+  flex-shrink: 0;
+}
+ 
+.modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-icon { color: #3b9fd9; }
+.modal-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1b485f;
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+}
+ 
+.modal-close-btn {
+  border: none;
+  background: rgba(100, 116, 139, 0.1);
+  border-radius: 8px;
+  padding: 5px;
+  cursor: pointer;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  transition: background 0.18s, color 0.18s;
+}
+.modal-close-btn:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: #ef4444;
+}
+ 
+/* Loading inside modal */
+.pixel-modal-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #8899aa;
+  font-size: 0.9rem;
+}
+.pts-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid rgba(200, 210, 220, 0.2);
+  border-top-color: #2f855a;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+ 
+/* Error inside modal */
+.pixel-modal-error {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #f87171;
+  font-size: 0.9rem;
+  padding: 2rem;
+}
+ 
+/* Chart fills remaining space */
+.pixel-modal-chart {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0;
+}
+ 
+/* ─── Modal transition ─────────────────────────────────────────── */
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
+}
+ 
+@media (max-width: 600px) {
+  .pixel-modal {
+    width: 98vw;
+    height: 88vh;
+    border-radius: 14px;
+  }
+}
+ 
 </style>
