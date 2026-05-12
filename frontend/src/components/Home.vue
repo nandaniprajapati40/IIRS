@@ -14,11 +14,11 @@
     </div>
 
     <!-- ══════════════════ HEADER ══════════════════ -->
-    <header class="app-header">
+   <header class="app-header">
       <div class="app-header-inner">
         <div class="header-logos">
           <img src="/assets/logo1.png" class="iirs-logo" onerror="this.style.display='none'" />
-          <img src="/assets/isro.png" class="iirs-logo" onerror="this.style.display='none'" />
+          <img src="/assets/isro.png"  class="iirs-logo" onerror="this.style.display='none'" />
         </div>
         <div class="header-center">
           <h2>भारतीय अंतरिक्ष अनुसंधान संगठन, अंतरिक्ष विभाग</h2>
@@ -26,12 +26,11 @@
           <h4>भारत सरकार / Government of India</h4>
         </div>
         <div class="header-logos header-logos-right">
-           <img src="/assets/iirs.png" class="iirs-logo" onerror="this.style.display='none'" />
-          <img src="/assets/india.png" class="gov-logo" onerror="this.style.display='none'" />
+          <img src="/assets/iirs.png"  class="iirs-logo" onerror="this.style.display='none'" />
+          <img src="/assets/india.png" class="gov-logo"  onerror="this.style.display='none'" />
         </div>
       </div>
     </header>
-
     <!-- ══════════════════ NAV ══════════════════ -->
     <nav class="nav-bar">
       <div class="nav-inner">
@@ -158,123 +157,16 @@
     </footer>
 
 
-    <!-- ══════════════════ AQUABOT CHATBOT PANEL ══════════════════ -->
-    <!-- FAB button (mobile) -->
-    <button class="chat-fab" @click="chatOpen = !chatOpen" :class="{ active: chatOpen }" title="Ask to Bot">
-      <span class="chat-fab-icon">{{ chatOpen ? '✕' : '💬' }}</span>
-      <span v-if="!chatOpen && unreadCount > 0" class="chat-fab-badge">{{ unreadCount }}</span>
-    </button>
-
-    <!-- Chat Panel -->
-    <div class="chat-panel" :class="{ open: chatOpen, dark: isDark }">
-      <!-- Panel Header -->
-      <div class="cp-header">
-        <div class="cp-header-left">
-          <div class="cp-avatar">🌾</div>
-          <div>
-            <div class="cp-title">Assistant</div>
-            <div class="cp-subtitle">
-              <span class="cp-dot" :class="{ thinking: botThinking }"></span>
-              {{ botThinking ? 'Thinking…' : '' }}
-            </div>
-          </div>
-        </div>
-        <button class="cp-close" @click="chatOpen = false">✕</button>
-      </div>
-
-      <!-- Suggested Questions -->
-      <div class="cp-suggestions" v-if="messages.length === 0">
-        <div class="cp-suggest-label">Ask me anything about irrigation:</div>
-        <div class="cp-chips">
-          <button v-for="q in suggestedQuestions" :key="q" class="cp-chip" @click="sendSuggestion(q)">{{ q }}</button>
-        </div>
-      </div>
-
-      <!-- Messages -->
-      <div class="cp-messages" ref="messagesEl">
-        <!-- Welcome message -->
-        <div v-if="messages.length === 0" class="cp-welcome">
-          <div class="cp-welcome-icon">🛰️</div>
-          <div class="cp-welcome-text">
-            Hello! I'm <strong>AquaBot</strong>, your irrigation intelligence assistant.<br>
-            
-          </div>
-        </div>
-
-        <div v-for="msg in messages" :key="msg.id"
-          class="cp-msg" :class="msg.role === 'user' ? 'cp-msg-user' : 'cp-msg-bot'">
-          <div class="cp-bubble">
-            <div class="cp-bubble-text" v-html="renderMarkdown(msg.content)"></div>
-            <!-- Live data card -->
-            <div v-if="msg.liveData && Object.keys(msg.liveData).length > 0" class="cp-data-card">
-              <div class="cp-data-title">📊 Live System Data</div>
-              <div class="cp-data-grid">
-                <div v-if="msg.liveData.savi" class="cp-data-item">
-                  <span class="cp-data-label">SAVI</span>
-                  <span class="cp-data-val">{{ msg.liveData.savi }}</span>
-                </div>
-                <div v-if="msg.liveData.kc" class="cp-data-item">
-                  <span class="cp-data-label">Kc</span>
-                  <span class="cp-data-val">{{ msg.liveData.kc }}</span>
-                </div>
-                <div v-if="msg.liveData.cwr" class="cp-data-item">
-                  <span class="cp-data-label">CWR</span>
-                  <span class="cp-data-val">{{ msg.liveData.cwr }} mm/d</span>
-                </div>
-                <div v-if="msg.liveData.iwr" class="cp-data-item">
-                  <span class="cp-data-label">IWR</span>
-                  <span class="cp-data-val">{{ msg.liveData.iwr }} mm/d</span>
-                </div>
-              </div>
-            </div>
-            <!-- Sources -->
-            <div v-if="msg.sources && msg.sources.length" class="cp-sources">
-              <span v-for="s in msg.sources" :key="s" class="cp-source-tag">{{ s }}</span>
-            </div>
-          </div>
-          <div class="cp-time">{{ msg.time }}</div>
-        </div>
-
-        <!-- Typing indicator -->
-        <div v-if="botThinking" class="cp-msg cp-msg-bot">
-          <div class="cp-bubble cp-typing">
-            <span></span><span></span><span></span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Error -->
-      <div v-if="chatError" class="cp-error">⚠ {{ chatError }}</div>
-
-      <!-- Input -->
-      <div class="cp-input-row">
-        <input
-          ref="inputEl"
-          v-model="userInput"
-          class="cp-input"
-          placeholder="Ask about irrigation, CWR, region…"
-          @keydown.enter.prevent="sendMessage"
-          :disabled="botThinking"
-          maxlength="300"
-        />
-        <button class="cp-send" @click="sendMessage" :disabled="botThinking || !userInput.trim()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
-            <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2"/>
-          </svg>
-        </button>
-      </div>
-    </div>
-
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref } from 'vue'
 
 const props = defineProps({
   isDark: { type: Boolean, default: true }
 })
-defineEmits(['launch', 'docs', 'toggle-theme'])
+defineEmits(['launch', 'docs', 'faqs', 'toggle-theme'])
 const mobileOpen = ref(false)
 
 function scrollTo(id) {
@@ -288,99 +180,6 @@ const particles = Array.from({ length: 18 }, (_, i) => ({
   delay: Math.random() * 10, dur: 8 + Math.random() * 10,
   size: 2 + Math.random() * 4, op: 0.08 + Math.random() * 0.22,
 }))
-
-// ── Chatbot State ────────────────────────────────────────────────────────────
-const chatOpen    = ref(false)
-const userInput   = ref('')
-const messages    = ref([])
-const botThinking = ref(false)
-const chatError   = ref('')
-const unreadCount = ref(0)
-const messagesEl  = ref(null)
-const inputEl     = ref(null)
-let   msgIdCtr    = 0
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-const suggestedQuestions = [
-  'What is CWR?',
-  'Current IWR status',
-  'Explain SAVI index',
-  'Rabi wheat irrigation schedule',
-  'About Udham Singh Nagar',
-  'What is Kc?',
-]
-
-function nowTime() {
-  return new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-}
-
-function renderMarkdown(text) {
-  if (!text) return ''
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^- (.+)/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-    .replace(/\n/g, '<br>')
-}
-
-function scrollToBottom() {
-  nextTick(() => {
-    if (messagesEl.value) {
-      messagesEl.value.scrollTop = messagesEl.value.scrollHeight
-    }
-  })
-}
-
-async function sendMessage() {
-  const q = userInput.value.trim()
-  if (!q || botThinking.value) return
-
-  chatError.value = ''
-  messages.value.push({ id: ++msgIdCtr, role: 'user', content: q, time: nowTime() })
-  userInput.value = ''
-  botThinking.value = true
-  scrollToBottom()
-
-  // Build history for context
-  const history = messages.value.slice(-6).map(m => ({ role: m.role, content: m.content }))
-
-  try {
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, history }),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
-    messages.value.push({
-      id: ++msgIdCtr,
-      role: 'bot',
-      content: data.answer,
-      sources: data.sources || [],
-      liveData: data.live_data || {},
-      time: nowTime(),
-    })
-    if (!chatOpen.value) unreadCount.value++
-  } catch (e) {
-    chatError.value = 'Could not reach the server. Please ensure the backend is running.'
-    messages.value.push({
-      id: ++msgIdCtr, role: 'bot',
-      content: 'Sorry, I could not connect to the server right now. Please try again shortly.',
-      sources: [], liveData: {}, time: nowTime(),
-    })
-  } finally {
-    botThinking.value = false
-    scrollToBottom()
-  }
-}
-
-function sendSuggestion(q) {
-  userInput.value = q
-  sendMessage()
-}
 
 </script>
 
@@ -529,22 +328,27 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
    HEADER
    ────────────────────────────────────────────────────────────────────── */
 .app-header {
-  position: relative; z-index: 201;
+  position: relative;
+  z-index: 201;
   background: var(--header-bg);
   border-bottom: 1px solid rgba(0, 0, 0, 0.18);
   padding: 14px 24px;
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.25);
   transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
+.app-header-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+}
 .home-root:not(.dark) .app-header {
   background: var(--header-bg);
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
 }
 
-.app-header-inner {
-  max-width: 1280px; margin: 0 auto;
-  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px;
-}
 
 .header-logos, .header-logos-right { display: flex; align-items: center; gap: 16px; }
 .header-logos-right { justify-content: flex-end; }
@@ -565,19 +369,24 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 .header-center h2 {
   font-family: 'Outfit', sans-serif;
   font-size: clamp(1.1rem, 2vw, 1.5rem);
-  font-weight: 800; color: var(--header-text);
-  margin: 0 0 4px; transition: color 0.3s ease;
+  font-weight: 800;
+  color: var(--header-text);
+  margin: 0 0 4px;
   text-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 .header-center h3 {
   font-size: clamp(1.0rem, 1.6vw, 1.15rem);
-  color: var(--header-text); opacity: 0.9;
-  font-weight: 500; margin: 0 0 2px;
+  color: var(--header-text);
+  opacity: 0.9;
+  font-weight: 500;
+  margin: 0 0 2px;
 }
 .header-center h4 {
   font-size: clamp(0.8rem, 1.3vw, 0.95rem);
-  color: var(--header-text); opacity: 0.75;
-  font-weight: 400; margin: 0;
+  color: var(--header-text);
+  opacity: 0.75;
+  font-weight: 400;
+  margin: 0;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -999,7 +808,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 }
 @media (max-width: 480px) {
   .hero-title         { font-size: 2.8rem; }
-  .app-header-inner   { grid-template-columns: 1fr; text-align: center; gap: 12px; }
+  .app-header-inner { grid-template-columns: 1fr; text-align: center; }
   .header-logos, .header-logos-right { justify-content: center; }
   .iirs-logo          { height: 40px; }
   .gov-logo           { height: 36px; }

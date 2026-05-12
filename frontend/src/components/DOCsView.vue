@@ -1,11 +1,10 @@
 <!-- DOCsView.vue -->
 <template>
-  <div class="wiki-root" :class="{ dark: isDark }">
-    <!-- ══════════════════ HEADER (matches Home.vue style) ══════════════════ -->
+  <div class="wiki-root">
     <header class="app-header">
       <div class="app-header-inner">
         <div class="header-logos">
-          <img src="/assets/iirs.png" class="iirs-logo" onerror="this.style.display='none'" />
+          <img src="/assets/logo1.png" class="iirs-logo" onerror="this.style.display='none'" />
           <img src="/assets/isro.png" class="iirs-logo" onerror="this.style.display='none'" />
         </div>
         <div class="header-center">
@@ -14,279 +13,276 @@
           <h4>भारत सरकार / Government of India</h4>
         </div>
         <div class="header-logos header-logos-right">
+          <img src="/assets/iirs.png" class="iirs-logo" onerror="this.style.display='none'" />
           <img src="/assets/india.png" class="gov-logo" onerror="this.style.display='none'" />
         </div>
       </div>
     </header>
 
-    <!-- ══════════════════ NAV BAR ══════════════════ -->
     <nav class="nav-bar">
       <div class="nav-inner">
         <div class="nav-links">
-          <button @click="$emit('home')" class="nav-link home-nav-link">
-            <span class="home-icon">🏠</span> Home
-          </button>
+          <button class="nav-link" @click="$emit('home')">Home</button>
+          <button class="nav-link active" @click="$emit('docs')">Docs</button>
+          <button class="nav-link" @click="$emit('faqs')">FAQs</button>
         </div>
-        <button class="mobile-menu-btn" @click="mobileOpen = !mobileOpen">
-          <span></span><span></span><span></span>
-        </button>
-      </div>
-      <div class="mobile-dropdown" :class="{ open: mobileOpen }">
-        <button @click="$emit('home'); mobileOpen=false" class="mobile-link">🏠 Home</button>
       </div>
     </nav>
 
-    <!-- ══════════════════ MAIN CONTENT ══════════════════ -->
-    <div class="wiki-layout">
-      <aside class="wiki-sidebar">
-        <div class="toc-box">
-          <div class="toc-title">Contents</div>
-          <ul class="toc-list">
-            <li><a href="#overview" @click.prevent="scrollTo('overview')">1. Overview</a></li>
-            <li><a href="#methodology" @click.prevent="scrollTo('methodology')">2. Methodology</a>
-              <ul>
-                <li><a href="#data-sources" @click.prevent="scrollTo('data-sources')">2.1 Data Sources & NDVI</a></li>
-                <li><a href="#water-demand" @click.prevent="scrollTo('water-demand')">2.2 ETc & Crop Demand</a></li>
-                <li><a href="#forecasting" @click.prevent="scrollTo('forecasting')">2.3 Analysis & Forecasting</a></li>
-              </ul>
-            </li>
-            <li><a href="#insights" @click.prevent="scrollTo('insights')">3. Key Insights & Data</a></li>
-            <li><a href="#impact" @click.prevent="scrollTo('impact')">4. Real-World Impact</a></li>
-          </ul>
-        </div>
-      </aside>
+    <main class="article-shell">
+      
 
-      <main class="wiki-content">
-        <h1 class="article-title">Irrigation Water Requirement</h1>
-        
-        <div class="article-meta">
-          From AquaWatch Interactive Knowledge Base
-        </div>
+      <div class="search-wrap">
+        <span class="search-icon">Search 🔍 </span>
+        <input
+          v-model="query"
+          type="search"
+          class="search-input"
+          placeholder="Search this"
+          autocomplete="off"
+        />
+        <button v-if="query" class="clear-btn" @click="query = ''">Clear</button>
+      </div>
 
-        <section id="overview">
-          <p>
-            <strong>Irrigation Water Requirement (IWR)</strong> estimation within the <strong>AquaWatch</strong> framework refers to the calculation of the precise volume of water that must be artificially supplied to crops. By systematically evaluating both crop-specific characteristics and dynamic atmospheric conditions, the platform aims to optimize agricultural water allocations and transition farmers away from generalized, traditional practices.
-          </p>
+      <p v-if="query" class="search-status">
+        Showing {{ filteredBlocks.length }} matching topic{{ filteredBlocks.length === 1 ? '' : 's' }} for "{{ query }}".
+      </p>
 
-          <div class="wiki-thumb right">
-            <div class="thumb-inner">
-              <img src="/assets/about.png" alt="AquaWatch Platform" />
-              <div class="thumbcaption">
-                The AquaWatch monitoring ecosystem integrates satellite and meteorological data.
-              </div>
+      <article class="wiki-article">
+        <aside class="fact-box">
+          <img src="/assets/about.png" alt="JalDrishti irrigation monitoring" onerror="this.style.display='none'" />
+          <dl>
+            <div>
+              <dt>Purpose</dt>
+              <dd>Smart irrigation planning</dd>
             </div>
-          </div>
-
-          <p>
-            The fundamental principle driving this system is the balance between total crop water demand (ETc) and effective precipitation (Pe). When combined, they yield the actual irrigation requirement—serving as a critical input for sustainable water resource management in regions like Udham Singh Nagar, Uttarakhand, where the Rabi wheat season is highly dependent on pumped groundwater.
-          </p>
-          
-          <div class="formula-box">
-            <span class="formula-title">Core Equation:</span>
-            <div class="formula-math">
-              <span class="text-blue">ET<sub>c</sub> (Crop Water Requirement)</span> − <span class="text-green">P<sub>e</sub> (Effective Rainfall)</span> = <span class="text-teal">IWR (Irrigation Water Requirement)</span>
+            <div>
+              <dt>Focus crop</dt>
+              <dd>Rabi wheat</dd>
             </div>
-          </div>
-        </section>
-
-        <h2 id="methodology">Methodology</h2>
-        
-        <section id="data-sources">
-          <h3>Data Sources & NDVI</h3>
-          <div class="wiki-thumb left">
-            <div class="thumb-inner">
-              <img src="/assets/barley.png" alt="Satellite imagery of fields" />
-              <div class="thumbcaption">
-                High-resolution Sentinel-2 multispectral imagery is used to identify actively cultivated agricultural land.
-              </div>
+            <div>
+              <dt>Study area</dt>
+              <dd>Udham Singh Nagar, Uttarakhand</dd>
             </div>
-          </div>
-          <p>
-            The estimation of IWR is not a singular measurement but a sequential pipeline of satellite image processing, meteorological data ingestion, and predictive modeling. AquaWatch relies heavily on the European Space Agency's Sentinel-2 satellite imagery at a 10-meter spatial resolution. This imagery is primarily used for identifying crop boundaries and generating the Normalised Difference Vegetation Index (NDVI).
-          </p>
-          <p>
-            Alongside Earth observation data, meteorological variables—specifically Potential Evapotranspiration (PET)—are acquired via the INSAT-3DR satellite system operated by ISRO. This dual-source approach continuously captures both ground reality and atmospheric evaporative forcing.
-          </p>
-        </section>
-
-        <section id="water-demand">
-          <h3>ETc & Crop Coefficients</h3>
-          <div class="wiki-thumb right">
-            <div class="thumb-inner">
-              <img src="/assets/kc.jpg" alt="Crop coefficient curve" />
-              <div class="thumbcaption">
-                Standard basal crop coefficient (Kc) evolution representing stages of a crop lifecycle.
-              </div>
+            <div>
+              <dt>Main outputs</dt>
+              <dd>CWR, IWR, SAVI, NDVI, Kc</dd>
             </div>
-          </div>
+          </dl>
+        </aside>
 
-          <p>
-            The calculation of ETc relies on the Food and Agriculture Organization's FAO-56 methodology: <code>ETc = Kc × ET₀</code>. Here, ET₀ represents the baseline reference evapotranspiration, while the crop coefficient (Kc) reflects local agricultural health.
-          </p>
-          <p>
-            Rather than relying on static, generalized tables, the system derives Kc dynamically from time-series NDVI observations. This ensures the water demand profiles accurately match actual phenological stages mapped to individual plots. During peak growth phases like the "Heading" and "Grain Fill" stages, IWR typically scales to 3–6 mm/day.
-          </p>
-          <p>
-            Next, effective rainfall (Pe) is assessed. If heavy precipitation events occur, Pe significantly lowers the final requirement. However, in low-rainfall Rabi seasons, precipitation offsets less than 20% of the requisite crop demand, meaning farmers bear the entire burden of irrigation management.
-          </p>
-        </section>
-
-        <section id="forecasting">
-          <h3>Analysis & Forecasting</h3>
-          <p>
-            Transforming descriptive analytics into operational intelligence requires prediction matrices. AquaWatch utilizes dual <strong>SARIMAX</strong> (Seasonal AutoRegressive Integrated Moving Average with eXogenous variables) grid models to forecast daily crop requirements 15 days in advance. Short-term tracking continuously recalibrates output weights to minimize localized errors—enabling robust support for canal authorities managing macro-level reservoirs.
-          </p>
-        </section>
-
-        <h2 id="insights">Key Insights & Spatial Data</h2>
-        <section>
-          <div class="wiki-thumb right">
-            <div class="thumb-inner">
-              <img src="/assets/cwr.jpeg" alt="Spatial crop water maps" />
-              <div class="thumbcaption">
-                Spatial output mapping sub-district variation in real-time.
-              </div>
-            </div>
-          </div>
-          <p>
-            Analyzing granular grid data from the Udham Singh Nagar district yields significant geospatial discoveries:
-          </p>
-          <ul>
-            <li><strong>Stage-Dependent Fluctuation:</strong> Growth spikes drastically adjust daily irrigation requirements. Predictability models indicate demand surges precisely between days 76 and 135 post-sowing.</li>
-            <li><strong>Sub-Regional Disparities:</strong> Maps consistently highlight 1–2 mm/day differences between immediately adjacent plots due to staggered planting schedules and differing soil drainage topologies.</li>
-            <li><strong>Satellite Congruence:</strong> NDVI-derived crop consumption data structurally aligns with localized ground-truth metering, verifying orbital telemetry as scalable alternatives to physical hardware grids.</li>
+        <section v-for="block in filteredBlocks" :key="block.title" class="article-block">
+          <h2 v-html="highlight(block.title)"></h2>
+          <p v-for="text in block.paragraphs" :key="text" v-html="highlight(text)"></p>
+          <ul v-if="block.points" class="plain-list">
+            <li v-for="point in block.points" :key="point" v-html="highlight(point)"></li>
           </ul>
         </section>
 
-        <h2 id="impact">Real-World Impact & Policy</h2>
-        <section>
-          <div class="wiki-thumb left">
-            <div class="thumb-inner">
-              <img src="/assets/wheat.png" alt="Healthy wheat crop" />
-              <div class="thumbcaption">
-                Optimal precision watering prevents degradation of soil profiles and maximizes crop yields.
-              </div>
-            </div>
-          </div>
-          <p>
-            Modernizing agricultural frameworks transitions farmers towards precision guidance, replacing historical intuition methodologies. In active zones, forecasting outputs translate directly to hardware pump timing: calculating a 4 mm daily deficit demands 20 mm replenishment per standard 5-day cycle.
-          </p>
-          <p>
-            Economically and environmentally, systematic application protocols radically curtail over-irrigation side effects. Phenomena including nitrogen fertilizer leaching, extensive surface waterlogging, and irreversible aquifer salination scale proportionally with excess pumping. Quantifications suggest implementing satellite advisories locally reduces groundwater abstraction volumes by 10 to 15%, conserving energy expenditure alongside deep-earth aquifers.
-          </p>
+        <section v-if="filteredBlocks.length === 0" class="empty-state">
+          <h2>No matching content found</h2>
+          <p>Try searching with a simpler word such as water, crop, map, graph, farmer, or satellite.</p>
         </section>
-      </main>
-    </div>
+      </article>
+    </main>
 
-    <!-- ══════════════════ FOOTER (matches Home.vue style) ══════════════════ -->
     <footer class="site-footer">
       <div class="footer-inner">
-        <div class="footer-brand">
-          <span></span>
-          <div>
-            <p class="fb-name">&nbsp;·&nbsp; Irrigation Water Requirements</p>
-            <p class="fb-sub">ISRO &nbsp;·&nbsp; IIRS &nbsp;·&nbsp; Department of Space, Govt. of India</p>
-          </div>
-        </div>
-        
-        <div class="footer-links-col">
-          <p class="fc">Udham Singh Nagar · Uttarakhand · Rabi Wheat</p>
-        </div>
+        <p><strong>JalDrishti</strong> · Irrigation Water Requirements</p>
+        <p>ISRO · IIRS · Department of Space, Government of India</p>
       </div>
     </footer>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
-const props = defineProps({
-  isDark: { type: Boolean, default: true }
+defineProps({ isDark: { type: Boolean, default: false } })
+defineEmits(['home', 'launch', 'docs', 'faqs'])
+
+const query = ref('')
+
+const articleBlocks = [
+  {
+    title: 'Introduction',
+    paragraphs: [
+      'JalDrishti is an intelligent irrigation monitoring platform that helps people understand how much water a crop needs and when irrigation may be required. It is designed for farmers, researchers, agricultural officers, and water resource managers who need clear information for better irrigation decisions.',
+      'The name combines two Sanskrit and Hindi words: Jal, meaning water, and Drishti, meaning vision or insight. Together, JalDrishti means a vision for smart water management.'
+    ]
+  },
+  {
+    title: 'What JalDrishti Does',
+    paragraphs: [
+      'The system works like a digital guide for crop water needs. It studies field conditions, weather information, and satellite-based crop indicators, then presents the results through maps, charts, and simple values.',
+      'Instead of asking users to understand complex data files, JalDrishti turns agricultural and environmental data into practical information that can support irrigation planning.'
+    ],
+    points: [
+      'Monitors irrigation conditions across agricultural areas.',
+      'Estimates Crop Water Requirement, also called CWR.',
+      'Shows map layers that help users compare different parts of a region.',
+      'Creates pixel-level graphs so users can study changes at a specific location.',
+      'Supports water conservation and precision agriculture.'
+    ]
+  },
+  {
+    title: 'Why It Is Useful',
+    paragraphs: [
+      'Crops do not need the same amount of water every day. Young plants need less water, actively growing crops need more, and mature crops need less again. Rainfall, soil moisture, temperature, and crop health also change the amount of irrigation required.',
+      'JalDrishti helps reduce guesswork. By showing where water demand is high or low, it can help avoid over-irrigation, save groundwater, reduce pumping cost, and support healthier crop growth.'
+    ]
+  },
+  {
+    title: 'Crop Water Requirement',
+    paragraphs: [
+      'Crop Water Requirement, or CWR, means the total amount of water a crop needs for healthy growth. Irrigation Water Requirement, or IWR, means the water that must be supplied through irrigation after considering rainfall and other available moisture.',
+      'In simple words: if the crop needs water and rainfall is not enough, irrigation is required. JalDrishti helps estimate this need for different crop stages and different locations.'
+    ],
+    points: [
+      'Evapotranspiration shows how much water is lost from soil and plants.',
+      'Vegetation indices show whether the crop appears healthy and active.',
+      'Climatic conditions such as temperature and rainfall affect daily water demand.',
+      'Crop coefficient, or Kc, helps adjust water demand according to crop growth stage.'
+    ]
+  },
+  {
+    title: 'Interactive Geospatial Dashboard',
+    paragraphs: [
+      'The dashboard provides a map-based view of agricultural areas. Users can view raster layers, explore irrigation zones, inspect crop condition, and understand how water requirement changes across the study region.',
+      'The map is useful because water need is not always the same in every field. Two nearby areas may have different crop growth, soil condition, or irrigation demand.'
+    ]
+  },
+  {
+    title: 'Raster Layers Explained',
+    paragraphs: [
+      'JalDrishti uses raster data, which means the map is divided into many small cells or pixels. Each pixel stores a value, such as crop health or water requirement. This allows the system to show detailed variation across a region.'
+    ],
+    points: [
+      'SAVI and NDVI help indicate vegetation condition and crop greenness.',
+      'CWR shows the water needed by the crop.',
+      'IWR shows the irrigation water that may need to be supplied.',
+      'Kc represents crop growth stage and water use behavior.',
+      'These layers make it easier to compare field conditions visually.'
+    ]
+  },
+  {
+    title: 'Pixel-Level Analytics',
+    paragraphs: [
+      'A user can click a particular point on the map to study the values for that location. JalDrishti can then show how the selected pixel changed over time.',
+      'This is helpful for local analysis. For example, a researcher can compare crop condition across multiple dates, while an irrigation planner can check whether a specific area is showing higher water demand.'
+    ]
+  },
+  {
+    title: 'Time-Series Graphs',
+    paragraphs: [
+      'Time-series graphs show how crop and irrigation values change day by day, week by week, or across a full season. These graphs make trends easier to understand than raw numbers.',
+      'The platform supports graph widgets that help users monitor daily analysis, weekly changes, seasonal irrigation trends, and historical crop performance.'
+    ]
+  },
+  {
+    title: 'Data Management',
+    paragraphs: [
+      'JalDrishti stores processed raster details, map layer information, and extracted analytical results in databases. This makes it possible to retrieve past records and compare historical agricultural conditions.',
+      'The system may use databases such as MongoDB and MySQL depending on the type of data being stored.'
+    ]
+  },
+  {
+    title: 'Technologies Used',
+    paragraphs: [
+      'JalDrishti is built as a web-based geospatial platform. The user-facing part is made with modern web technologies, while the processing side uses tools for satellite data, raster analysis, databases, and charts.',
+      'For non-technical users, the important point is simple: these technologies work together so that complex satellite and weather data can be shown as easy maps, graphs, and irrigation indicators.'
+    ],
+    points: [
+      'Frontend tools create the website, dashboard, map interface, and charts.',
+      'Backend tools process requests and connect the dashboard with data.',
+      'GIS tools handle satellite images, raster files, and map services.',
+      'Analytics tools help calculate crop indicators and water requirement values.',
+      'Cloud and infrastructure tools help run and manage the system.'
+    ]
+  },
+  {
+    title: 'System Architecture',
+    paragraphs: [
+      'The platform follows a layered structure. First, data is collected from satellite images, raster datasets, and weather sources. Next, the data is processed to calculate crop and irrigation indicators. Then it is stored for future use. Finally, the results are displayed through maps, charts, and dashboard tools.',
+      'This layered approach keeps the system organized and makes it easier to expand in the future.'
+    ]
+  },
+  {
+    title: 'Applications',
+    paragraphs: [
+      'JalDrishti can support precision agriculture, smart irrigation planning, agricultural research, water resource management, crop monitoring, and drought assessment.',
+      'It is especially useful in regions where irrigation water is limited or where crop water demand changes quickly during the growing season.'
+    ]
+  },
+  {
+    title: 'Benefits',
+    paragraphs: [
+      'The main benefit of JalDrishti is better decision-making. It helps users understand when irrigation is needed, where water demand is higher, and how crop conditions are changing over time.',
+      'By supporting efficient irrigation planning, the platform can help reduce water wastage, improve crop productivity, and support sustainable agriculture.'
+    ]
+  },
+  {
+    title: 'Future Enhancements',
+    paragraphs: [
+      'Future development can make JalDrishti even more useful by adding AI-based irrigation prediction, real-time IoT sensor data, mobile application support, automated drought alerts, weather forecast integration, and 3D agricultural visualization.',
+      'These additions would help the platform move from monitoring current conditions to giving stronger forward-looking irrigation guidance.'
+    ]
+  },
+  {
+    title: 'Conclusion',
+    paragraphs: [
+      'JalDrishti is a modern irrigation intelligence platform that combines geospatial analysis, remote sensing, weather information, and interactive visualization. Its goal is to make crop water requirement information clear, useful, and accessible.',
+      'By helping users understand irrigation demand in near real time, JalDrishti supports smarter agricultural practices, better water management, and more sustainable use of natural resources.'
+    ]
+  }
+]
+
+const filteredBlocks = computed(() => {
+  const term = query.value.trim().toLowerCase()
+  if (!term) return articleBlocks
+
+  return articleBlocks.filter((block) => {
+    const haystack = [
+      block.title,
+      ...block.paragraphs,
+      ...(block.points || [])
+    ].join(' ').toLowerCase()
+
+    return haystack.includes(term)
+  })
 })
 
-const emit = defineEmits(['home', 'launch'])
-const mobileOpen = ref(false)
+function highlight(text) {
+  const term = query.value.trim()
+  if (!term) return text
 
-function scrollTo(id) {
-  const el = document.getElementById(id)
-  if (!el) return
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 100, behavior: 'smooth' })
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.replace(new RegExp(`(${escaped})`, 'gi'), '<mark>$1</mark>')
 }
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@500;700&display=swap');
 
-/* ──────────────────────────────────────────────────────────────────────
-   THEME SYSTEM (matches Home.vue)
-   ────────────────────────────────────────────────────────────────────── */
 .wiki-root {
-  /* DARK THEME */
-  --bg-primary: #040814;
-  --bg-secondary: #0A1128;
-  --bg-tertiary: #131E3A;
-  --surface: rgba(19, 30, 58, 0.4);
-  --border: rgba(0, 212, 168, 0.15);
-  --border-light: rgba(255,255,255,0.04);
-  
-  --text-primary: #F8FAFC;
-  --text-secondary: #94A3B8;
-  --text-muted: #64748B;
-  
-  --accent-teal: #00D4A8;
-  --accent-teal-glow: rgba(0, 212, 168, 0.15);
-  --accent-amber: #FDE047;
-  --accent-blue: #3B82F6;
-  
-  --card-bg: rgba(30, 41, 59, 0.5);
   --header-bg: #1A4A6B;
   --header-text: #FFFFFF;
   --nav-bg: #009688;
   --nav-text: #FFFFFF;
-
-  font-family: 'Inter', sans-serif;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  transition: background 0.4s ease, color 0.4s ease;
   min-height: 100vh;
-  overflow-x: hidden;
+  background: #ffffff;
+  color: #1f2937;
+  font-family: 'Inter', sans-serif;
 }
 
-/* LIGHT THEME OVERRIDES */
-.wiki-root:not(.dark) {
-  --bg-primary: #F8FAFC;
-  --bg-secondary: #F1F5F9;
-  --bg-tertiary: #E2E8F0;
-  --surface: #FFFFFF;
-  --border: rgba(0, 0, 0, 0.08);
-  --border-light: rgba(0, 0, 0, 0.05);
-  
-  --text-primary: #0F172A;
-  --text-secondary: #334155;
-  --text-muted: #64748B;
-  
-  --accent-teal: #0D9488;
-  --accent-teal-glow: rgba(13, 148, 136, 0.18);
-  --accent-amber: #D97706;
-  --accent-blue: #2563EB;
-  
-  --card-bg: rgba(255, 255, 255, 0.85);
-  --header-bg: #F8FAFC;
-  --header-text: #0F172A;
-  --nav-bg: #FFFFFF;
-  --nav-text: #0D9488;
-}
-
-/* ──────────────────────────────────────────────────────────────────────
-   HEADER (copied from Home.vue)
-   ────────────────────────────────────────────────────────────────────── */
 .app-header {
   position: relative;
+  z-index: 201;
   background: var(--header-bg);
   border-bottom: 1px solid rgba(0, 0, 0, 0.18);
   padding: 14px 24px;
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.25);
-  transition: background 0.4s ease;
+  transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
 
 .app-header-inner {
@@ -298,24 +294,26 @@ function scrollTo(id) {
   gap: 16px;
 }
 
-.header-logos, .header-logos-right {
+.header-logos,
+.header-logos-right {
   display: flex;
   align-items: center;
   gap: 16px;
 }
+
 .header-logos-right {
   justify-content: flex-end;
 }
 
-.iirs-logo, .gov-logo {
+.iirs-logo,
+.gov-logo {
   height: 64px;
   width: auto;
   object-fit: contain;
-  transition: transform 0.3s ease;
+  transition: transform 0.3s ease, filter 0.3s ease;
 }
-.iirs-logo:hover, .gov-logo:hover {
-  transform: scale(1.05);
-}
+.iirs-logo:hover,
+.gov-logo:hover { transform: scale(1.05); }
 
 .gov-logo {
   height: 60px;
@@ -326,32 +324,32 @@ function scrollTo(id) {
   text-align: center;
   padding: 0 8px;
 }
+
 .header-center h2 {
+  margin: 0 0 4px;
+  color: var(--header-text);
   font-family: 'Outfit', sans-serif;
   font-size: clamp(1.1rem, 2vw, 1.5rem);
   font-weight: 800;
-  color: var(--header-text);
-  margin: 0 0 4px;
   text-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
+
 .header-center h3 {
-  font-size: clamp(1.0rem, 1.6vw, 1.15rem);
+  margin: 0 0 2px;
   color: var(--header-text);
   opacity: 0.9;
+  font-size: clamp(1.0rem, 1.6vw, 1.15rem);
   font-weight: 500;
-  margin: 0 0 2px;
-}
-.header-center h4 {
-  font-size: clamp(0.8rem, 1.3vw, 0.95rem);
-  color: var(--header-text);
-  opacity: 0.75;
-  font-weight: 400;
-  margin: 0;
 }
 
-/* ──────────────────────────────────────────────────────────────────────
-   NAVIGATION (copied from Home.vue)
-   ────────────────────────────────────────────────────────────────────── */
+.header-center h4 {
+  margin: 0;
+  color: var(--header-text);
+  opacity: 0.75;
+  font-size: clamp(0.8rem, 1.3vw, 0.95rem);
+  font-weight: 400;
+}
+
 .nav-bar {
   position: sticky;
   top: 0;
@@ -359,14 +357,14 @@ function scrollTo(id) {
   background: var(--nav-bg);
   border-bottom: 2px solid rgba(0, 0, 0, 0.15);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.20);
-  transition: background 0.4s ease;
+  transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
 
 .nav-inner {
   max-width: 1280px;
+  height: 64px;
   margin: 0 auto;
   padding: 0 24px;
-  height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -381,25 +379,19 @@ function scrollTo(id) {
 }
 
 .nav-link {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9rem;
-  color: var(--nav-text);
-  text-decoration: none;
-  padding: 8px 20px;
+  border: 0;
   border-radius: 6px;
-  transition: all 0.2s ease;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  background: none;
-  border: none;
+  background: transparent;
+  color: var(--nav-text);
   cursor: pointer;
   font-family: 'Inter', sans-serif;
-}
-
-.home-icon {
-  font-size: 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 8px 20px;
+  position: relative;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
 }
 
 .nav-link::after {
@@ -415,462 +407,269 @@ function scrollTo(id) {
   border-radius: 2px;
 }
 
-.nav-link {
-  position: relative;
+.nav-link:hover,
+.nav-link.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
 }
 
-.nav-link:hover {
-  background: rgba(255,255,255,0.18);
-  color: #FFFFFF;
-}
-.nav-link:hover::after {
-  width: 70%;
+.nav-link:hover::after,
+.nav-link.active::after { width: 70%; }
+
+.article-shell {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 40px 24px 60px;
 }
 
-.mobile-menu-btn {
-  display: none;
-  flex-direction: column;
-  gap: 6px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 6px;
-  margin-left: auto;
-}
-.mobile-menu-btn span {
-  display: block;
-  width: 24px;
-  height: 2px;
-  background: var(--text-primary);
-  border-radius: 2px;
-  transition: 0.3s;
-}
-
-.mobile-dropdown {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.4s ease;
+.article-top {
   display: flex;
-  flex-direction: column;
-  padding: 0 24px;
-  border-top: 1px solid transparent;
-  background: var(--surface);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #d7dee8;
+  padding-bottom: 22px;
 }
-.mobile-dropdown.open {
-  max-height: 400px;
-  padding: 16px 24px;
-  border-top-color: var(--border);
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
-.mobile-link {
-  padding: 12px 0;
-  font-size: 1rem;
-  color: var(--text-primary);
-  background: none;
-  border: none;
-  text-align: left;
+
+h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.subtitle {
+  margin: 12px 0 0;
+  color: #ffffff;
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  font-weight: 600;
+}
+
+.quick-links {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.quick-links button,
+.clear-btn {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f766e;
   cursor: pointer;
-  border-bottom: 1px solid var(--border-light);
-  font-weight: 500;
-}
-
-/* ──────────────────────────────────────────────────────────────────────
-   DOCS LAYOUT (Professional - Adobe/Starbucks style)
-   ────────────────────────────────────────────────────────────────────── */
-.wiki-layout {
-  max-width: 1280px;
-  margin: 60px auto;
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: 48px;
-  padding: 0 24px;
-}
-
-/* Sidebar TOC - Glass card style */
-.toc-box {
-  background: var(--surface);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 28px 24px;
-  position: sticky;
-  top: 100px;
-  transition: all 0.3s ease;
-}
-
-.toc-title {
-  font-family: 'Outfit', sans-serif;
+  font: inherit;
   font-weight: 700;
-  font-size: 1.1rem;
-  color: var(--accent-teal);
-  padding-bottom: 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-  letter-spacing: -0.01em;
+  padding: 9px 14px;
 }
 
-.toc-list {
-  list-style: none;
-  padding: 0;
+.quick-links button:hover,
+.clear-btn:hover {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+
+.search-wrap {
+  margin: 24px 0 8px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.search-icon {
+  color: #0f766e;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.search-input {
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #111827;
+  font: inherit;
+  font-size: 0.98rem;
+}
+
+.search-status {
+  margin: 0 0 18px;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.wiki-article {
+  margin-top: 28px;
+  color: #1f2937;
+  font-size: 1.02rem;
+  line-height: 1.75;
+}
+
+.fact-box {
+  float: right;
+  width: min(300px, 42%);
+  margin: 0 0 24px 32px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.fact-box img {
+  display: block;
+  width: 100%;
+  height: 170px;
+  object-fit: cover;
+  background: #e2e8f0;
+}
+
+.fact-box dl {
   margin: 0;
 }
 
-.toc-list li {
-  margin-bottom: 12px;
+.fact-box div {
+  display: grid;
+  grid-template-columns: 105px 1fr;
+  gap: 10px;
+  border-top: 1px solid #e2e8f0;
+  padding: 10px 12px;
 }
 
-.toc-list ul {
-  list-style: none;
-  padding-left: 20px;
-  margin-top: 8px;
-}
-
-.toc-list a {
-  color: var(--text-secondary);
-  text-decoration: none;
-  font-size: 0.9rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
-  display: block;
-  padding: 6px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-}
-
-.toc-list a:hover {
-  color: var(--accent-teal);
-  background: var(--accent-teal-glow);
-  transform: translateX(4px);
-}
-
-/* Main Content */
-.wiki-content {
-  background: var(--surface);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
-  border-radius: 32px;
-  padding: 48px 56px;
-  transition: all 0.3s ease;
-}
-
-.article-title {
-  font-family: 'Outfit', sans-serif;
-  font-size: 2.8rem;
+.fact-box dt {
+  color: #334155;
   font-weight: 800;
-  background: linear-gradient(135deg, var(--accent-teal), var(--accent-blue));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  margin: 0 0 12px;
-  letter-spacing: -0.02em;
 }
 
-.article-meta {
-  font-size: 0.9rem;
-  color: var(--text-muted);
-  padding-bottom: 24px;
-  margin-bottom: 32px;
-  border-bottom: 1px solid var(--border);
+.fact-box dd {
+  margin: 0;
+  color: #475569;
 }
 
-.wiki-content section {
-  margin-bottom: 40px;
+.article-block {
+  margin-bottom: 28px;
 }
 
-.wiki-content p {
-  font-size: 1rem;
-  line-height: 1.7;
-  margin-bottom: 20px;
-  color: var(--text-secondary);
+.article-block h2,
+.empty-state h2 {
+  margin: 0 0 10px;
+  border-bottom: 1px solid #d7dee8;
+  color: #111827;
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.35;
+  padding-bottom: 6px;
 }
 
-.wiki-content strong {
-  color: var(--accent-teal);
-  font-weight: 600;
+.article-block p,
+.empty-state p {
+  margin: 0 0 13px;
 }
 
-.wiki-content ul {
-  line-height: 1.7;
-  margin-bottom: 24px;
-  padding-left: 24px;
+.plain-list {
+  margin: 8px 0 0 22px;
+  padding: 0;
 }
 
-.wiki-content li {
-  margin-bottom: 10px;
-  color: var(--text-secondary);
+.plain-list li {
+  margin-bottom: 6px;
 }
 
-.wiki-content h2 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 1.8rem;
-  font-weight: 700;
-  margin: 48px 0 24px;
-  padding-bottom: 12px;
-  border-bottom: 2px solid var(--accent-teal);
-  display: inline-block;
-  letter-spacing: -0.01em;
+:deep(mark) {
+  border-radius: 3px;
+  background: #fef08a;
+  color: inherit;
+  padding: 0 2px;
 }
 
-.wiki-content h3 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 1.3rem;
-  font-weight: 600;
-  margin: 32px 0 16px;
-  color: var(--accent-teal);
-  letter-spacing: -0.01em;
-}
-
-/* Thumbnails */
-.wiki-thumb {
-  border: 1px solid var(--border);
-  background: var(--bg-tertiary);
-  border-radius: 20px;
-  padding: 8px;
-  margin-bottom: 24px;
-  width: 280px;
-}
-
-.wiki-thumb.right {
-  float: right;
-  margin-left: 32px;
-}
-
-.wiki-thumb.left {
-  float: left;
-  margin-right: 32px;
-}
-
-.thumb-inner img {
-  width: 100%;
-  height: auto;
-  display: block;
-  border-radius: 12px;
-}
-
-.thumbcaption {
-  font-size: 0.75rem;
-  line-height: 1.45;
-  color: var(--text-muted);
-  margin-top: 10px;
-  padding: 0 8px;
-  text-align: center;
-}
-
-/* Formula Box */
-.formula-box {
-  background: var(--accent-teal-glow);
-  border-left: 4px solid var(--accent-teal);
-  border-radius: 16px;
-  padding: 20px 28px;
-  margin: 32px 0;
-  font-family: 'JetBrains Mono', monospace;
-}
-
-.formula-title {
-  display: block;
-  font-weight: 700;
-  margin-bottom: 12px;
-  color: var(--text-muted);
-  font-family: 'Inter', sans-serif;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.formula-math {
-  font-size: 1.2rem;
-  font-weight: 500;
-}
-
-.text-blue {
-  color: var(--accent-blue);
-}
-
-.text-green {
-  color: var(--accent-amber);
-}
-
-.text-teal {
-  color: var(--accent-teal);
-  font-weight: bold;
-}
-
-code {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  padding: 2px 8px;
+.empty-state {
+  border: 1px dashed #cbd5e1;
   border-radius: 8px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.85rem;
-  color: var(--accent-teal);
+  padding: 24px;
+  background: #f8fafc;
 }
 
-/* Clear floats */
-.wiki-content::after {
-  content: "";
-  display: table;
-  clear: both;
-}
-
-/* ──────────────────────────────────────────────────────────────────────
-   FOOTER (copied from Home.vue)
-   ────────────────────────────────────────────────────────────────────── */
 .site-footer {
-  position: relative;
-  background: #070808;
-  border-top: 1px solid var(--border);
-  padding: 10px 24px 40px;
-  margin-top: 60px;
+  border-top: 1px solid #d7dee8;
+  background: #f8fafc;
+  padding: 24px;
 }
-.wiki-root:not(.dark) .site-footer {
-  background: #f1f5f9;
-}
+
 .footer-inner {
-  max-width: 1100px;
+  max-width: 1040px;
   margin: 0 auto;
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 32px;
+  gap: 12px;
+  color: #64748b;
+  font-size: 0.9rem;
 }
-.footer-brand {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  font-size: 1.8rem;
-}
-.fb-name {
-  font-weight: 700;
-  font-family: 'Outfit', sans-serif;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-  margin: 0 0 6px;
-  letter-spacing: 0.05em;
-}
-.fb-sub {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+
+.footer-inner p {
   margin: 0;
 }
-.footer-tech {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  max-width: 460px;
-}
-.ft-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: 50px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  transition: all 0.2s ease;
-}
-.ft-badge:hover {
-  border-color: var(--accent-teal);
-  color: var(--accent-teal);
-  transform: translateY(-2px);
-}
-.footer-links-col {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-end;
-}
-.fc {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin: 0;
-  font-family: 'JetBrains Mono', monospace;
-}
 
-/* ──────────────────────────────────────────────────────────────────────
-   RESPONSIVE
-   ────────────────────────────────────────────────────────────────────── */
-@media (max-width: 1024px) {
-  .wiki-layout {
-    grid-template-columns: 1fr;
-    gap: 32px;
-  }
-  .toc-box {
-    position: relative;
-    top: 0;
-  }
-  .wiki-content {
-    padding: 32px 28px;
-  }
-  .wiki-thumb.right,
-  .wiki-thumb.left {
-    float: none;
-    width: 100%;
-    max-width: 320px;
-    margin: 24px auto;
-  }
-}
-
-@media (max-width: 768px) {
-  .nav-links {
-    display: none;
-  }
-  .mobile-menu-btn {
-    display: flex;
-  }
-  .header-logos {
-    min-width: 80px;
-  }
-  .iirs-logo {
-    height: 55px;
-  }
-  .gov-logo {
-    height: 55px;
-  }
-  .footer-links-col {
-    align-items: flex-start;
-  }
-  .article-title {
-    font-size: 2rem;
-  }
-  .wiki-content h2 {
-    font-size: 1.4rem;
-  }
-  .wiki-content h3 {
-    font-size: 1.1rem;
-  }
-}
-
-@media (max-width: 480px) {
+@media (max-width: 760px) {
   .app-header-inner {
     grid-template-columns: 1fr;
     text-align: center;
-    gap: 12px;
   }
-  .header-logos, .header-logos-right {
+
+  .header-logos,
+  .header-logos-right {
     justify-content: center;
   }
+
   .iirs-logo {
+    height: 44px;
+  }
+
+  .gov-logo {
     height: 40px;
   }
-  .gov-logo {
-    height: 36px;
-  }
-  .footer-inner {
+
+  .article-top {
     flex-direction: column;
-    align-items: center;
-    text-align: center;
   }
-  .footer-links-col {
-    align-items: center;
+
+  .quick-links {
+    width: 100%;
   }
-  .wiki-content {
-    padding: 24px 20px;
+
+  .quick-links button {
+    flex: 1;
   }
-  .formula-math {
-    font-size: 0.9rem;
+
+  .search-wrap {
+    grid-template-columns: 1fr auto;
+  }
+
+  .search-icon {
+    grid-column: 1 / -1;
+  }
+
+  .fact-box {
+    float: none;
+    width: 100%;
+    margin: 0 0 24px;
   }
 }
 </style>

@@ -17,6 +17,7 @@
       :is-dark="isDark"
       @launch="showDashboard"
       @home="showHome"
+      @docs="showDOCs"
     />
 
     <!-- ════ DOCS PAGE ════ -->
@@ -25,6 +26,7 @@
       :is-dark="isDark"
       @launch="showDashboard"
       @home="showHome"
+      @faqs="showFAQs"
     />
 
     <!-- ════ DASHBOARD ════ -->

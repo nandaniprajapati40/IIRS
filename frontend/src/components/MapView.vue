@@ -732,7 +732,7 @@ function calculateSaviFromKc(kcValue) {
 
 const isForecastLoading = ref(false)
 const boundaryLoaded = ref(false)
-const currentMapStyle = ref('street')
+const currentMapStyle = ref('Satellite')
 const isStyleDropdownOpen = ref(false)
 // isDarkMode is now derived from the isDark prop passed by App.vue
 const isDarkMode = computed(() => props.isDark)
@@ -747,6 +747,13 @@ let kcForecastLayer = null
 
 // Map style options
 const mapStyles = [
+
+  {
+    name: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri',
+    // icon: 'Satellite'
+  },
   {
     name: 'street',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -759,12 +766,6 @@ const mapStyles = [
     attribution: '© CartoDB',
     // icon: 'Focus'
   },
-  {
-    name: 'Satellite',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: '© Esri',
-    // icon: 'Satellite'
-  }
 ]
 
 // GeoServer configuration
