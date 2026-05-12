@@ -22,9 +22,7 @@
       </div>
     </div>
 
-    <!-- Kc Forecast Window Selector (shown only when Kc layer is active) -->
-    <div class="forecast-window-bar" v-if="props.layers.kc">
-    </div>
+    
 
     <!-- Info Panel (shown on map click / My Location) -->
     <div class="info-panel" v-if="pointData" :class="{ 'light': !isDarkMode }">
@@ -206,88 +204,458 @@
 
 
 
-     <!-- ── Pixel Trend Modal ─────────────────────────────────────────── -->
-    <Transition name="modal-fade">
-      <div class="pixel-modal-backdrop" v-if="showPixelModal" @click.self="showPixelModal = false">
-        <div class="pixel-modal">
- 
-          <!-- Modal Header -->
-          <div class="pixel-modal-header">
-            <div class="modal-title-row">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" stroke-width="2.2" class="modal-icon">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    <!-- ── Floating Pixel Trend Widget ─────────────────────────────────── -->
+    <Transition name="pixel-widget-fade">
+      <aside
+        class="pixel-trend-widget"
+        :class="{
+          minimized: pixelWidgetMinimized,
+          maximized: pixelWidgetMaximized,
+          dragging: pixelWidgetDragging,
+          resizing: pixelWidgetResizing
+        }"
+        :style="pixelWidgetStyle"
+        v-if="showPixelWidget"
+        aria-live="polite"
+        @pointerdown.stop
+      >
+        <div class="pixel-widget-header" @pointerdown="startPixelWidgetDrag">
+          <div class="pixel-widget-title">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <span>Pixel Time Series</span>
+          </div>
+          <div class="pixel-widget-actions">
+            <button
+              class="pixel-widget-action"
+              @click="togglePixelWidgetMinimized"
+              :aria-label="pixelWidgetMinimized ? 'Restore pixel chart' : 'Minimize pixel chart'"
+              :title="pixelWidgetMinimized ? 'Restore' : 'Minimize'"
+            >
+              <svg v-if="pixelWidgetMinimized" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.3">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+                <path d="M16 3h3a2 2 0 0 1 2 2v3"/>
+                <path d="M8 21H5a2 2 0 0 1-2-2v-3"/>
+                <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
               </svg>
-              <span class="modal-title">Pixel Trend Analysis</span>
-            </div>
-            <button class="modal-close-btn" @click="showPixelModal = false" aria-label="Close">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.5">
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
+            <button
+              class="pixel-widget-action"
+              @click="togglePixelWidgetMaximized"
+              :aria-label="pixelWidgetMaximized ? 'Restore graph window' : 'Maximize graph window'"
+              :title="pixelWidgetMaximized ? 'Restore' : 'Maximize'"
+            >
+              <svg v-if="pixelWidgetMaximized" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.2">
+                <path d="M8 3v5H3"/>
+                <path d="M16 3v5h5"/>
+                <path d="M8 21v-5H3"/>
+                <path d="M16 21v-5h5"/>
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+                <path d="M16 3h3a2 2 0 0 1 2 2v3"/>
+                <path d="M8 21H5a2 2 0 0 1-2-2v-3"/>
+                <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+              </svg>
+            </button>
+            <button
+              class="pixel-widget-action close"
+              @click="closePixelWidget"
+              aria-label="Close pixel chart"
+              title="Close"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="2.5">
                 <line x1="18" y1="6" x2="6" y2="18"/>
                 <line x1="6" y1="6" x2="18" y2="18"/>
               </svg>
             </button>
           </div>
- 
-          <!-- Loading state (while API call is in flight) -->
-          <div v-if="pixelTimeSeriesLoading" class="pixel-modal-loading">
-            <div class="pts-spinner"></div>
-            <span>Loading historical pixel data…</span>
-          </div>
- 
-          <!-- Error state -->
-          <div v-else-if="pixelTimeSeriesError" class="pixel-modal-error">
-            ⚠ {{ pixelTimeSeriesError }}
-          </div>
- 
-          <!-- Chart -->
-          <PixelChart
-            v-else
-            :pixelData="pixelTimeSeries"
-            :initialLayer="activeLayers[0]?.name || 'savi'"
-            class="pixel-modal-chart"
-          />
- 
         </div>
-      </div>
+
+        <div class="pixel-widget-body" v-show="!pixelWidgetMinimized">
+          <div v-if="pixelTimeSeriesLoading" class="pixel-widget-loading" aria-busy="true">
+            <div class="pixel-loading-copy">
+              <strong>Reading raster pixels</strong>
+              <span>Refreshing the time series for this location…</span>
+            </div>
+            <div class="pixel-loading-grid">
+              <span></span>
+              <span></span>
+            </div>
+            <div class="pixel-loading-chart">
+              <span v-for="n in 10" :key="n"></span>
+            </div>
+          </div>
+
+          <div v-else-if="pixelTimeSeriesError" class="pixel-widget-error">
+            <strong>Unable to load pixel trend</strong>
+            <span>{{ pixelTimeSeriesError }}</span>
+          </div>
+
+          <PixelChart
+            v-else-if="pixelTimeSeries"
+            v-model:modelLayer="pixelWidgetLayer"
+            v-model:modelMode="pixelWidgetMode"
+            v-model:modelZoom="pixelWidgetZoom"
+            :pixelData="pixelTimeSeries"
+            :initialLayer="pixelWidgetLayer || activeLayers[0]?.name || 'savi'"
+            theme="glass"
+            compact
+            class="pixel-widget-chart"
+          />
+
+          <div v-else class="pixel-widget-empty">
+            Click a raster pixel to load SAVI, KC, CWR, IWR, and ETC trends.
+          </div>
+        </div>
+
+        <div
+          v-for="handle in pixelResizeHandles"
+          v-show="!pixelWidgetMinimized && !pixelWidgetMaximized"
+          :key="handle"
+          :class="['pixel-resize-handle', `pixel-resize-${handle}`]"
+          @pointerdown.stop.prevent="startPixelWidgetResize(handle, $event)"
+        ></div>
+      </aside>
     </Transition>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, reactive, nextTick, onMounted, onUnmounted, watch, computed } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import DataChart from './DataChart.vue'
 import PixelChart from './PixelChart.vue'
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const pixelTimeSeries         = ref(null)   // /api/pixel-timeseries response
-const showPixelModal          = ref(false)
+const showPixelWidget         = ref(false)
+const pixelWidgetMinimized    = ref(false)
 const pixelTimeSeriesLoading  = ref(false)
 const pixelTimeSeriesError    = ref(null)
+const selectedPixelLocation   = ref(null)
+const pixelWidgetLayer        = ref(null)
+const pixelWidgetMode         = ref('monthly')
+const pixelWidgetZoom         = ref(1)
+const pixelWidgetMaximized    = ref(false)
+const pixelWidgetDragging     = ref(false)
+const pixelWidgetResizing     = ref(false)
+const pixelWidgetFrame        = reactive({
+  x: 0,
+  y: 84,
+  width: 760,
+  height: 650,
+  initialized: false,
+})
+const pixelResizeHandles      = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw']
+const pixelRequestGroup       = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+let pixelTimeSeriesRequestId  = 0
+let pixelTimeSeriesSequence   = 0
+let pixelTimeSeriesController = null
+let pointDataRequestId        = 0
+let pointDataController       = null
+let mapClickRequestId         = 0
+let pixelWidgetPointerState   = null
+
+const PIXEL_WIDGET_GUTTER = 12
+const PIXEL_WIDGET_MIN_WIDTH = 420
+const PIXEL_WIDGET_MIN_HEIGHT = 360
+const PIXEL_WIDGET_DEFAULT_WIDTH = 780
+const PIXEL_WIDGET_DEFAULT_HEIGHT = 650
+const PIXEL_WIDGET_MINIMIZED_HEIGHT = 58
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
+function getMapContainerRect() {
+  const container = mapEl.value?.closest('.map-container')
+  return container?.getBoundingClientRect() || {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }
+}
+
+function getPixelWidgetLimits() {
+  const rect = getMapContainerRect()
+  const maxWidth = Math.max(280, rect.width - PIXEL_WIDGET_GUTTER * 2)
+  const maxHeight = Math.max(260, rect.height - PIXEL_WIDGET_GUTTER * 2)
+  return {
+    containerWidth: rect.width,
+    containerHeight: rect.height,
+    minWidth: Math.min(PIXEL_WIDGET_MIN_WIDTH, maxWidth),
+    minHeight: Math.min(PIXEL_WIDGET_MIN_HEIGHT, maxHeight),
+    maxWidth,
+    maxHeight,
+  }
+}
+
+function clampPixelWidgetFrame() {
+  const limits = getPixelWidgetLimits()
+  pixelWidgetFrame.width = clamp(pixelWidgetFrame.width, limits.minWidth, limits.maxWidth)
+  pixelWidgetFrame.height = clamp(pixelWidgetFrame.height, limits.minHeight, limits.maxHeight)
+  pixelWidgetFrame.x = clamp(
+    pixelWidgetFrame.x,
+    PIXEL_WIDGET_GUTTER,
+    Math.max(PIXEL_WIDGET_GUTTER, limits.containerWidth - pixelWidgetFrame.width - PIXEL_WIDGET_GUTTER)
+  )
+  pixelWidgetFrame.y = clamp(
+    pixelWidgetFrame.y,
+    PIXEL_WIDGET_GUTTER,
+    Math.max(PIXEL_WIDGET_GUTTER, limits.containerHeight - pixelWidgetFrame.height - PIXEL_WIDGET_GUTTER)
+  )
+}
+
+function ensurePixelWidgetFrame() {
+  const limits = getPixelWidgetLimits()
+  if (!pixelWidgetFrame.initialized) {
+    pixelWidgetFrame.width = clamp(PIXEL_WIDGET_DEFAULT_WIDTH, limits.minWidth, limits.maxWidth)
+    pixelWidgetFrame.height = clamp(PIXEL_WIDGET_DEFAULT_HEIGHT, limits.minHeight, limits.maxHeight)
+    pixelWidgetFrame.x = Math.max(PIXEL_WIDGET_GUTTER, limits.containerWidth - pixelWidgetFrame.width - 18)
+    pixelWidgetFrame.y = clamp(84, PIXEL_WIDGET_GUTTER, Math.max(PIXEL_WIDGET_GUTTER, limits.containerHeight - pixelWidgetFrame.height - PIXEL_WIDGET_GUTTER))
+    pixelWidgetFrame.initialized = true
+  }
+  clampPixelWidgetFrame()
+}
+
+const pixelWidgetStyle = computed(() => {
+  if (pixelWidgetMaximized.value) {
+    return {
+      left: `${PIXEL_WIDGET_GUTTER}px`,
+      top: `${PIXEL_WIDGET_GUTTER}px`,
+      width: `calc(100% - ${PIXEL_WIDGET_GUTTER * 2}px)`,
+      height: `calc(100% - ${PIXEL_WIDGET_GUTTER * 2}px)`,
+    }
+  }
+
+  const width = pixelWidgetMinimized.value
+    ? Math.min(pixelWidgetFrame.width, 420)
+    : pixelWidgetFrame.width
+
+  return {
+    left: `${pixelWidgetFrame.x}px`,
+    top: `${pixelWidgetFrame.y}px`,
+    width: `${width}px`,
+    height: `${pixelWidgetMinimized.value ? PIXEL_WIDGET_MINIMIZED_HEIGHT : pixelWidgetFrame.height}px`,
+  }
+})
+
+function schedulePixelChartResize() {
+  nextTick(() => {
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+  })
+}
+
+function togglePixelWidgetMinimized() {
+  if (pixelWidgetMaximized.value) pixelWidgetMaximized.value = false
+  pixelWidgetMinimized.value = !pixelWidgetMinimized.value
+  schedulePixelChartResize()
+}
+
+function togglePixelWidgetMaximized() {
+  ensurePixelWidgetFrame()
+  if (pixelWidgetMinimized.value) pixelWidgetMinimized.value = false
+  pixelWidgetMaximized.value = !pixelWidgetMaximized.value
+  schedulePixelChartResize()
+}
+
+function startPixelWidgetDrag(event) {
+  if (event.button !== 0) return
+  if (pixelWidgetMaximized.value) return
+  if (event.target.closest('button, select, input, textarea, .pixel-resize-handle')) return
+
+  ensurePixelWidgetFrame()
+  event.preventDefault()
+  pixelWidgetDragging.value = true
+  pixelWidgetPointerState = {
+    type: 'drag',
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    x: pixelWidgetFrame.x,
+    y: pixelWidgetFrame.y,
+    width: pixelWidgetFrame.width,
+    height: pixelWidgetFrame.height,
+  }
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+  window.addEventListener('pointermove', movePixelWidgetPointer)
+  window.addEventListener('pointerup', stopPixelWidgetPointer)
+  window.addEventListener('pointercancel', stopPixelWidgetPointer)
+}
+
+function startPixelWidgetResize(handle, event) {
+  if (event.button !== 0 || pixelWidgetMaximized.value || pixelWidgetMinimized.value) return
+
+  ensurePixelWidgetFrame()
+  pixelWidgetResizing.value = true
+  pixelWidgetPointerState = {
+    type: 'resize',
+    handle,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    x: pixelWidgetFrame.x,
+    y: pixelWidgetFrame.y,
+    width: pixelWidgetFrame.width,
+    height: pixelWidgetFrame.height,
+  }
+  window.addEventListener('pointermove', movePixelWidgetPointer)
+  window.addEventListener('pointerup', stopPixelWidgetPointer)
+  window.addEventListener('pointercancel', stopPixelWidgetPointer)
+}
+
+function movePixelWidgetPointer(event) {
+  if (!pixelWidgetPointerState || event.pointerId !== pixelWidgetPointerState.pointerId) return
+
+  const dx = event.clientX - pixelWidgetPointerState.startX
+  const dy = event.clientY - pixelWidgetPointerState.startY
+
+  if (pixelWidgetPointerState.type === 'drag') {
+    pixelWidgetFrame.x = pixelWidgetPointerState.x + dx
+    pixelWidgetFrame.y = pixelWidgetPointerState.y + dy
+    clampPixelWidgetFrame()
+    return
+  }
+
+  const limits = getPixelWidgetLimits()
+  const handle = pixelWidgetPointerState.handle
+  const right = pixelWidgetPointerState.x + pixelWidgetPointerState.width
+  const bottom = pixelWidgetPointerState.y + pixelWidgetPointerState.height
+  let nextX = pixelWidgetPointerState.x
+  let nextY = pixelWidgetPointerState.y
+  let nextWidth = pixelWidgetPointerState.width
+  let nextHeight = pixelWidgetPointerState.height
+
+  if (handle.includes('e')) {
+    nextWidth = clamp(
+      pixelWidgetPointerState.width + dx,
+      limits.minWidth,
+      limits.containerWidth - pixelWidgetPointerState.x - PIXEL_WIDGET_GUTTER
+    )
+  }
+  if (handle.includes('s')) {
+    nextHeight = clamp(
+      pixelWidgetPointerState.height + dy,
+      limits.minHeight,
+      limits.containerHeight - pixelWidgetPointerState.y - PIXEL_WIDGET_GUTTER
+    )
+  }
+  if (handle.includes('w')) {
+    nextWidth = clamp(
+      pixelWidgetPointerState.width - dx,
+      limits.minWidth,
+      right - PIXEL_WIDGET_GUTTER
+    )
+    nextX = right - nextWidth
+  }
+  if (handle.includes('n')) {
+    nextHeight = clamp(
+      pixelWidgetPointerState.height - dy,
+      limits.minHeight,
+      bottom - PIXEL_WIDGET_GUTTER
+    )
+    nextY = bottom - nextHeight
+  }
+
+  pixelWidgetFrame.x = nextX
+  pixelWidgetFrame.y = nextY
+  pixelWidgetFrame.width = nextWidth
+  pixelWidgetFrame.height = nextHeight
+  clampPixelWidgetFrame()
+  schedulePixelChartResize()
+}
+
+function stopPixelWidgetPointer() {
+  if (!pixelWidgetPointerState) return
+
+  pixelWidgetDragging.value = false
+  pixelWidgetResizing.value = false
+  pixelWidgetPointerState = null
+  window.removeEventListener('pointermove', movePixelWidgetPointer)
+  window.removeEventListener('pointerup', stopPixelWidgetPointer)
+  window.removeEventListener('pointercancel', stopPixelWidgetPointer)
+  schedulePixelChartResize()
+}
+
+function handlePixelWidgetViewportResize() {
+  if (!pixelWidgetFrame.initialized) return
+  clampPixelWidgetFrame()
+  schedulePixelChartResize()
+}
+
+function abortPixelTimeSeriesRequest() {
+  if (pixelTimeSeriesController) {
+    pixelTimeSeriesController.abort()
+    pixelTimeSeriesController = null
+  }
+}
+
 async function fetchPixelTimeSeries(lat, lon) {
+  const requestId = Date.now() * 1000 + (++pixelTimeSeriesSequence)
+  pixelTimeSeriesRequestId = requestId
+  abortPixelTimeSeriesRequest()
+
+  const controller = new AbortController()
+  pixelTimeSeriesController = controller
+  ensurePixelWidgetFrame()
+  selectedPixelLocation.value = { lat: Number(lat), lon: Number(lon) }
+  showPixelWidget.value = true
+  pixelWidgetMinimized.value = false
   pixelTimeSeriesLoading.value = true
   pixelTimeSeriesError.value   = null
   pixelTimeSeries.value        = null
  
   try {
     const res = await fetch(
-      `http://localhost:8000/api/pixel-timeseries?lat=${lat}&lon=${lon}`
+      `${API_BASE}/api/pixel-timeseries?lat=${lat}&lon=${lon}&request_group=${encodeURIComponent(pixelRequestGroup)}&request_id=${requestId}`,
+      { signal: controller.signal, cache: 'no-store' }
     )
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err?.detail || `HTTP ${res.status}`)
     }
-    pixelTimeSeries.value = await res.json()
+    const data = await res.json()
+    if (requestId === pixelTimeSeriesRequestId) {
+      pixelTimeSeries.value = data
+    }
   } catch (err) {
+    if (err.name === 'AbortError') return
     console.error('[pixel-ts] fetch error:', err)
-    pixelTimeSeriesError.value = err.message || 'Failed to load pixel timeseries'
+    if (requestId === pixelTimeSeriesRequestId) {
+      pixelTimeSeriesError.value = err.message || 'Failed to load pixel timeseries'
+    }
   } finally {
-    pixelTimeSeriesLoading.value = false
+    if (requestId === pixelTimeSeriesRequestId) {
+      pixelTimeSeriesLoading.value = false
+      if (pixelTimeSeriesController === controller) {
+        pixelTimeSeriesController = null
+      }
+    }
   }
+}
+
+function closePixelWidget() {
+  pixelTimeSeriesRequestId = Date.now() * 1000 + (++pixelTimeSeriesSequence)
+  abortPixelTimeSeriesRequest()
+  showPixelWidget.value = false
+  pixelWidgetMinimized.value = false
+  pixelTimeSeriesLoading.value = false
+  pixelTimeSeriesError.value = null
+  pixelTimeSeries.value = null
+  selectedPixelLocation.value = null
 }
  
 
-// DEFINE PROPS - THIS WAS MISSING!
 const props = defineProps({
   layers: {
     type: Object,
@@ -400,14 +768,14 @@ const mapStyles = [
 ]
 
 // GeoServer configuration
-const GEOSERVER_URL = 'http://192.168.17.28:8080/geoserver'
+const GEOSERVER_URL = 'http://localhost:8080/geoserver'
 const WORKSPACE = 'irrigation'
 
 const layerConfigs = {
   savi: { name: 'savi', displayName: 'SAVI',        style: 'savi_style' },
   kc:   { name: 'kc',   displayName: 'Kc',          style: 'kc_style'  },
-  cwr:  { name: 'cwr',  displayName: 'CWR (mm/day)', style: 'cwr_style' },
-  iwr:  { name: 'iwr',  displayName: 'IWR (mm/day)', style: 'iwr_style' },
+  cwr:  { name: 'cwr',  displayName: 'CWR (mm)',     style: 'cwr_style' },
+  iwr:  { name: 'iwr',  displayName: 'IWR (mm)',     style: 'iwr_style' },
   etc:  { name: 'etc',  displayName: 'ETc (mm/day)', style: 'etc_style' },
 }
 
@@ -485,22 +853,45 @@ function refreshKcForecastLayer() {
 
 // Fetch point data
 async function fetchPointData(lat, lon) {
+  const requestId = ++pointDataRequestId
+  if (pointDataController) {
+    pointDataController.abort()
+  }
+  const controller = new AbortController()
+  pointDataController = controller
+
   try {
     const pointRes = await fetch(
-      `http://localhost:8000/api/point?lat=${lat}&lon=${lon}&slot=${props.slot}`
+      `${API_BASE}/api/point?lat=${lat}&lon=${lon}&slot=${props.slot}`,
+      { signal: controller.signal, cache: 'no-store' }
     )
+    if (!pointRes.ok) {
+      const err = await pointRes.json().catch(() => ({}))
+      throw new Error(err?.detail || `HTTP ${pointRes.status}`)
+    }
     const data = await pointRes.json()
 
-    pointData.value = {
-      lat: Number(data.lat),
-      lon: Number(data.lon),
-      acquisition_date: data.acquisition_date || 'N/A',
-      values: data.values || {},
+    if (requestId === pointDataRequestId) {
+      pointData.value = {
+        lat: Number(data.lat),
+        lon: Number(data.lon),
+        acquisition_date: data.acquisition_date || 'N/A',
+        values: data.values || {},
+      }
+      forecastData.value = data.forecast || {}
     }
-    forecastData.value = data.forecast || {}
+    return requestId === pointDataRequestId
   } catch (err) {
+    if (err.name === 'AbortError') return false
     console.error("Point fetch error:", err)
-    pointData.value = null
+    if (requestId === pointDataRequestId) {
+      pointData.value = null
+    }
+    return false
+  } finally {
+    if (pointDataController === controller) {
+      pointDataController = null
+    }
   }
 }
 
@@ -556,81 +947,3218 @@ watch(() => props.opacity, (val) => {
   })
 })
 
-// ── Color maps matching GeoServer SLD styles ──────────────────────────────
+// ── Color maps — interpolated from GeoServer SLD anchor stops ─────────────
 // Used ONLY for the info-panel chip background colour (not for WMS tile rendering).
 const colorMaps = {
+  // ── SAVI: -1.0 → 1.0, step 0.1 (21 stops) ──────────────────────────────────
   savi: [
-    { value: -1.0, color: '#8B0000' }, { value: -0.8, color: '#A52A2A' },
-    { value: -0.6, color: '#CD5C5C' }, { value: -0.4, color: '#FF4500' },
-    { value: -0.2, color: '#FF8C00' }, { value:  0.0, color: '#FFA500' },
-    { value:  0.1, color: '#FFD700' }, { value:  0.2, color: '#FFFF00' },
-    { value:  0.3, color: '#ADFF2F' }, { value:  0.4, color: '#90EE90' },
-    { value:  0.5, color: '#32CD32' }, { value:  0.6, color: '#228B22' },
-    { value:  0.7, color: '#008000' }, { value:  0.8, color: '#006400' },
-    { value:  0.9, color: '#004d00' }, { value:  1.0, color: '#003300' },
+  // SAVI -1.0→1.0 step 0.1  (21 stops)
+  { value:       -1, color: '#8B0000' },
+  { value:     -0.9, color: '#9E0B00' },
+  { value:     -0.8, color: '#B21700' },
+  { value:     -0.7, color: '#C52200' },
+  { value:     -0.6, color: '#D82E00' },
+  { value:     -0.5, color: '#EC3900' },
+  { value:     -0.4, color: '#FF4500' },
+  { value:     -0.3, color: '#FF5D00' },
+  { value:     -0.2, color: '#FF7500' },
+  { value:     -0.1, color: '#FF8D00' },
+  { value:        0, color: '#FFA500' },
+  { value:      0.1, color: '#FFD200' },
+  { value:      0.2, color: '#FFFF00' },
+  { value:      0.3, color: '#D6FF17' },
+  { value:      0.4, color: '#ADFF2F' },
+  { value:      0.5, color: '#68C529' },
+  { value:      0.6, color: '#228B22' },
+  { value:      0.7, color: '#117811' },
+  { value:      0.8, color: '#006400' },
+  { value:      0.9, color: '#004C00' },
+  { value:        1, color: '#003300' },
   ],
+  // ── Kc: 0.0 → 1.5, step 0.1 (16 stops) ─────────────────────────────────────
   kc: [
-    { value: 0.0, color: '#FFD700' }, { value: 0.1, color: '#FFD700' },
-    { value: 0.2, color: '#FFD700' }, { value: 0.3, color: '#DAA520' },
-    { value: 0.4, color: '#BDB76B' }, { value: 0.5, color: '#90EE90' },
-    { value: 0.6, color: '#90EE90' }, { value: 0.7, color: '#7CCD7C' },
-    { value: 0.8, color: '#32CD32' }, { value: 0.9, color: '#32CD32' },
-    { value: 1.0, color: '#228B22' }, { value: 1.1, color: '#006400' },
-    { value: 1.2, color: '#006400' }, { value: 1.3, color: '#556B2F' },
-    { value: 1.4, color: '#8B4513' }, { value: 1.5, color: '#8B4513' },
+  // Kc   0.0→1.5  step 0.1  (16 stops)
+  { value:        0, color: '#FFD700' },
+  { value:      0.1, color: '#F3C60B' },
+  { value:      0.2, color: '#E6B615' },
+  { value:      0.3, color: '#DAA520' },
+  { value:      0.4, color: '#B5CA58' },
+  { value:      0.5, color: '#90EE90' },
+  { value:      0.6, color: '#71E371' },
+  { value:      0.7, color: '#51D851' },
+  { value:      0.8, color: '#32CD32' },
+  { value:      0.9, color: '#2AAC2A' },
+  { value:        1, color: '#228B22' },
+  { value:      1.1, color: '#0B710B' },
+  { value:      1.2, color: '#2E5A06' },
+  { value:      1.3, color: '#8B4513' },
+  { value:      1.4, color: '#733909' },
+  { value:      1.5, color: '#5C2E00' },
   ],
-  // CWR observed (mm/day) — matches cwr_style SLD (0–10 range)
+  // ── CWR: 0 → 150 mm, step 0.1 (1501 stops) ─────────────────────────────────
   cwr: [
-    { value:   0, color: '#5D4037' }, { value:   1, color: '#6D4C41' },
-    { value:   2, color: '#795548' }, { value:   3, color: '#A1887F' },
-    { value:   4, color: '#BC8F6F' }, { value: 4.5, color: '#D4AC0D' },
-    { value:   5, color: '#F1C40F' }, { value: 5.5, color: '#9CCC65' },
-    { value:   6, color: '#66BB6A' }, { value: 6.5, color: '#42A5F5' },
-    { value:   7, color: '#1E88E5' }, { value: 7.5, color: '#1565C0' },
-    { value:   8, color: '#0D47A1' }, { value: 8.5, color: '#0B3C91' },
-    { value:   9, color: '#082567' }, { value: 9.5, color: '#4A148C' },
-    { value:  10, color: '#2E0854' },
+  // CWR  0→150    step 0.1  (1501 stops)
+  { value:        0, color: '#00C853' },
+  { value:      0.1, color: '#01C853' },
+  { value:      0.2, color: '#01C853' },
+  { value:      0.3, color: '#02C852' },
+  { value:      0.4, color: '#02C852' },
+  { value:      0.5, color: '#03C852' },
+  { value:      0.6, color: '#04C852' },
+  { value:      0.7, color: '#04C851' },
+  { value:      0.8, color: '#05C951' },
+  { value:      0.9, color: '#05C950' },
+  { value:        1, color: '#2bfb46' },
+  { value:      1.1, color: '#07C950' },
+  { value:      1.2, color: '#07C94F' },
+  { value:      1.3, color: '#08CA4F' },
+  { value:      1.4, color: '#08CA4E' },
+  { value:      1.5, color: '#09CA4E' },
+  { value:      1.6, color: '#0ACA4E' },
+  { value:      1.7, color: '#0ACA4E' },
+  { value:      1.8, color: '#1f20b9' },
+  { value:      1.9, color: '#0BCA4D' },
+  { value:        2, color: '#0CCA4D' },
+  { value:      2.1, color: '#0CCA4D' },
+  { value:      2.2, color: '#0DCA4D' },
+  { value:      2.3, color: '#0DCA4C' },
+  { value:      2.4, color: '#0ECA4C' },
+  { value:      2.5, color: '#0ECA4C' },
+  { value:      2.6, color: '#0FCA4C' },
+  { value:      2.7, color: '#0FCA4C' },
+  { value:      2.8, color: '#10CB4B' },
+  { value:      2.9, color: '#10CB4B' },
+  { value:        3, color: '#11CB4B' },
+  { value:      3.1, color: '#12CB4B' },
+  { value:      3.2, color: '#12CB4B' },
+  { value:      3.3, color: '#13CC4A' },
+  { value:      3.4, color: '#13CC4A' },
+  { value:      3.5, color: '#14CC4A' },
+  { value:      3.6, color: '#15CC4A' },
+  { value:      3.7, color: '#15CC49' },
+  { value:      3.8, color: '#16CC49' },
+  { value:      3.9, color: '#16CC48' },
+  { value:        4, color: '#17CC48' },
+  { value:      4.1, color: '#18CC48' },
+  { value:      4.2, color: '#18CC47' },
+  { value:      4.3, color: '#19CD47' },
+  { value:      4.4, color: '#19CD46' },
+  { value:      4.5, color: '#1ACD46' },
+  { value:      4.6, color: '#1BCD46' },
+  { value:      4.7, color: '#1BCD46' },
+  { value:      4.8, color: '#1CCE45' },
+  { value:      4.9, color: '#1CCE45' },
+  { value:        5, color: '#1DCE45' },
+  { value:      5.1, color: '#1ECE45' },
+  { value:      5.2, color: '#1ECE45' },
+  { value:      5.3, color: '#1FCE44' },
+  { value:      5.4, color: '#1FCE44' },
+  { value:      5.5, color: '#20CE44' },
+  { value:      5.6, color: '#21CE44' },
+  { value:      5.7, color: '#21CE43' },
+  { value:      5.8, color: '#22CF43' },
+  { value:      5.9, color: '#22CF42' },
+  { value:        6, color: '#23CF42' },
+  { value:      6.1, color: '#24CF42' },
+  { value:      6.2, color: '#24CF41' },
+  { value:      6.3, color: '#25D041' },
+  { value:      6.4, color: '#25D040' },
+  { value:      6.5, color: '#26D040' },
+  { value:      6.6, color: '#27D040' },
+  { value:      6.7, color: '#27D040' },
+  { value:      6.8, color: '#28D03F' },
+  { value:      6.9, color: '#28D03F' },
+  { value:        7, color: '#29D03F' },
+  { value:      7.1, color: '#2AD03F' },
+  { value:      7.2, color: '#2AD03F' },
+  { value:      7.3, color: '#2BD03E' },
+  { value:      7.4, color: '#2BD03E' },
+  { value:      7.5, color: '#2CD03E' },
+  { value:      7.6, color: '#2CD03E' },
+  { value:      7.7, color: '#2DD03E' },
+  { value:      7.8, color: '#2DD13D' },
+  { value:      7.9, color: '#2ED13D' },
+  { value:        8, color: '#2ED13D' },
+  { value:      8.1, color: '#2FD13D' },
+  { value:      8.2, color: '#2FD13D' },
+  { value:      8.3, color: '#30D23C' },
+  { value:      8.4, color: '#30D23C' },
+  { value:      8.5, color: '#31D23C' },
+  { value:      8.6, color: '#32D23C' },
+  { value:      8.7, color: '#32D23B' },
+  { value:      8.8, color: '#33D23B' },
+  { value:      8.9, color: '#33D23A' },
+  { value:        9, color: '#34D23A' },
+  { value:      9.1, color: '#35D23A' },
+  { value:      9.2, color: '#35D239' },
+  { value:      9.3, color: '#36D239' },
+  { value:      9.4, color: '#36D238' },
+  { value:      9.5, color: '#37D238' },
+  { value:      9.6, color: '#38D238' },
+  { value:      9.7, color: '#38D238' },
+  { value:      9.8, color: '#39D337' },
+  { value:      9.9, color: '#39D337' },
+  { value:       10, color: '#3AD337' },
+  { value:     10.1, color: '#3BD337' },
+  { value:     10.2, color: '#3BD337' },
+  { value:     10.3, color: '#3CD436' },
+  { value:     10.4, color: '#3CD436' },
+  { value:     10.5, color: '#3DD436' },
+  { value:     10.6, color: '#3ED436' },
+  { value:     10.7, color: '#3ED435' },
+  { value:     10.8, color: '#3FD435' },
+  { value:     10.9, color: '#3FD434' },
+  { value:       11, color: '#40D434' },
+  { value:     11.1, color: '#41D434' },
+  { value:     11.2, color: '#41D434' },
+  { value:     11.3, color: '#42D433' },
+  { value:     11.4, color: '#42D433' },
+  { value:     11.5, color: '#43D433' },
+  { value:     11.6, color: '#44D433' },
+  { value:     11.7, color: '#44D433' },
+  { value:     11.8, color: '#45D532' },
+  { value:     11.9, color: '#45D532' },
+  { value:       12, color: '#46D532' },
+  { value:     12.1, color: '#46D532' },
+  { value:     12.2, color: '#47D531' },
+  { value:     12.3, color: '#47D631' },
+  { value:     12.4, color: '#48D630' },
+  { value:     12.5, color: '#48D630' },
+  { value:     12.6, color: '#49D630' },
+  { value:     12.7, color: '#49D630' },
+  { value:     12.8, color: '#4AD72F' },
+  { value:     12.9, color: '#4AD72F' },
+  { value:       13, color: '#4BD72F' },
+  { value:     13.1, color: '#4CD72F' },
+  { value:     13.2, color: '#4CD72F' },
+  { value:     13.3, color: '#4DD82E' },
+  { value:     13.4, color: '#4DD82E' },
+  { value:     13.5, color: '#4ED82E' },
+  { value:     13.6, color: '#4FD82E' },
+  { value:     13.7, color: '#4FD82D' },
+  { value:     13.8, color: '#50D82D' },
+  { value:     13.9, color: '#50D82C' },
+  { value:       14, color: '#51D82C' },
+  { value:     14.1, color: '#52D82C' },
+  { value:     14.2, color: '#52D82C' },
+  { value:     14.3, color: '#53D82B' },
+  { value:     14.4, color: '#53D82B' },
+  { value:     14.5, color: '#54D82B' },
+  { value:     14.6, color: '#55D82B' },
+  { value:     14.7, color: '#55D82B' },
+  { value:     14.8, color: '#56D92A' },
+  { value:     14.9, color: '#56D92A' },
+  { value:       15, color: '#57D92A' },
+  { value:     15.1, color: '#58D92A' },
+  { value:     15.2, color: '#58D929' },
+  { value:     15.3, color: '#59DA29' },
+  { value:     15.4, color: '#59DA28' },
+  { value:     15.5, color: '#5ADA28' },
+  { value:     15.6, color: '#5BDA28' },
+  { value:     15.7, color: '#5BDA28' },
+  { value:     15.8, color: '#5CDA27' },
+  { value:     15.9, color: '#5CDA27' },
+  { value:       16, color: '#5DDA27' },
+  { value:     16.1, color: '#5EDA27' },
+  { value:     16.2, color: '#5EDA27' },
+  { value:     16.3, color: '#5FDA26' },
+  { value:     16.4, color: '#5FDA26' },
+  { value:     16.5, color: '#60DA26' },
+  { value:     16.6, color: '#61DA26' },
+  { value:     16.7, color: '#61DA25' },
+  { value:     16.8, color: '#62DB25' },
+  { value:     16.9, color: '#62DB24' },
+  { value:       17, color: '#63DB24' },
+  { value:     17.1, color: '#64DB24' },
+  { value:     17.2, color: '#64DB23' },
+  { value:     17.3, color: '#65DC23' },
+  { value:     17.4, color: '#65DC22' },
+  { value:     17.5, color: '#66DC22' },
+  { value:     17.6, color: '#66DC22' },
+  { value:     17.7, color: '#67DC22' },
+  { value:     17.8, color: '#67DD21' },
+  { value:     17.9, color: '#68DD21' },
+  { value:       18, color: '#68DD21' },
+  { value:     18.1, color: '#69DD21' },
+  { value:     18.2, color: '#69DD21' },
+  { value:     18.3, color: '#6ADE20' },
+  { value:     18.4, color: '#6ADE20' },
+  { value:     18.5, color: '#6BDE20' },
+  { value:     18.6, color: '#6CDE20' },
+  { value:     18.7, color: '#6CDE20' },
+  { value:     18.8, color: '#6DDE1F' },
+  { value:     18.9, color: '#6DDE1F' },
+  { value:       19, color: '#6EDE1F' },
+  { value:     19.1, color: '#6FDE1F' },
+  { value:     19.2, color: '#6FDE1F' },
+  { value:     19.3, color: '#70DE1E' },
+  { value:     19.4, color: '#70DE1E' },
+  { value:     19.5, color: '#71DE1E' },
+  { value:     19.6, color: '#72DE1E' },
+  { value:     19.7, color: '#72DE1D' },
+  { value:     19.8, color: '#73DF1D' },
+  { value:     19.9, color: '#73DF1C' },
+  { value:       20, color: '#74DF1C' },
+  { value:     20.1, color: '#75DF1C' },
+  { value:     20.2, color: '#75DF1B' },
+  { value:     20.3, color: '#76E01B' },
+  { value:     20.4, color: '#76E01A' },
+  { value:     20.5, color: '#77E01A' },
+  { value:     20.6, color: '#78E01A' },
+  { value:     20.7, color: '#78E01A' },
+  { value:     20.8, color: '#79E019' },
+  { value:     20.9, color: '#79E019' },
+  { value:       21, color: '#7AE019' },
+  { value:     21.1, color: '#7BE019' },
+  { value:     21.2, color: '#7BE019' },
+  { value:     21.3, color: '#7CE018' },
+  { value:     21.4, color: '#7CE018' },
+  { value:     21.5, color: '#7DE018' },
+  { value:     21.6, color: '#7EE018' },
+  { value:     21.7, color: '#7EE017' },
+  { value:     21.8, color: '#7FE117' },
+  { value:     21.9, color: '#7FE116' },
+  { value:       22, color: '#80E116' },
+  { value:     22.1, color: '#80E116' },
+  { value:     22.2, color: '#81E116' },
+  { value:     22.3, color: '#81E215' },
+  { value:     22.4, color: '#82E215' },
+  { value:     22.5, color: '#82E215' },
+  { value:     22.6, color: '#83E215' },
+  { value:     22.7, color: '#83E215' },
+  { value:     22.8, color: '#84E214' },
+  { value:     22.9, color: '#84E214' },
+  { value:       23, color: '#85E214' },
+  { value:     23.1, color: '#86E214' },
+  { value:     23.2, color: '#86E213' },
+  { value:     23.3, color: '#87E213' },
+  { value:     23.4, color: '#87E212' },
+  { value:     23.5, color: '#88E212' },
+  { value:     23.6, color: '#89E212' },
+  { value:     23.7, color: '#89E212' },
+  { value:     23.8, color: '#8AE311' },
+  { value:     23.9, color: '#8AE311' },
+  { value:       24, color: '#8BE311' },
+  { value:     24.1, color: '#8CE311' },
+  { value:     24.2, color: '#8CE311' },
+  { value:     24.3, color: '#8DE410' },
+  { value:     24.4, color: '#8DE410' },
+  { value:     24.5, color: '#8EE410' },
+  { value:     24.6, color: '#8FE410' },
+  { value:     24.7, color: '#8FE40F' },
+  { value:     24.8, color: '#90E40F' },
+  { value:     24.9, color: '#90E40E' },
+  { value:       25, color: '#91E40E' },
+  { value:     25.1, color: '#92E40E' },
+  { value:     25.2, color: '#92E40D' },
+  { value:     25.3, color: '#93E50D' },
+  { value:     25.4, color: '#93E50C' },
+  { value:     25.5, color: '#94E50C' },
+  { value:     25.6, color: '#95E50C' },
+  { value:     25.7, color: '#95E50C' },
+  { value:     25.8, color: '#96E60B' },
+  { value:     25.9, color: '#96E60B' },
+  { value:       26, color: '#97E60B' },
+  { value:     26.1, color: '#98E60B' },
+  { value:     26.2, color: '#98E60B' },
+  { value:     26.3, color: '#99E60A' },
+  { value:     26.4, color: '#99E60A' },
+  { value:     26.5, color: '#9AE60A' },
+  { value:     26.6, color: '#9BE60A' },
+  { value:     26.7, color: '#9BE609' },
+  { value:     26.8, color: '#9CE709' },
+  { value:     26.9, color: '#9CE708' },
+  { value:       27, color: '#9DE708' },
+  { value:     27.1, color: '#9EE708' },
+  { value:     27.2, color: '#9EE708' },
+  { value:     27.3, color: '#9FE807' },
+  { value:     27.4, color: '#9FE807' },
+  { value:     27.5, color: '#A0E807' },
+  { value:     27.6, color: '#A0E807' },
+  { value:     27.7, color: '#A1E807' },
+  { value:     27.8, color: '#A1E806' },
+  { value:     27.9, color: '#A2E806' },
+  { value:       28, color: '#A2E806' },
+  { value:     28.1, color: '#A3E806' },
+  { value:     28.2, color: '#A3E805' },
+  { value:     28.3, color: '#A4E805' },
+  { value:     28.4, color: '#A4E804' },
+  { value:     28.5, color: '#A5E804' },
+  { value:     28.6, color: '#A6E804' },
+  { value:     28.7, color: '#A6E804' },
+  { value:     28.8, color: '#A7E903' },
+  { value:     28.9, color: '#A7E903' },
+  { value:       29, color: '#A8E903' },
+  { value:     29.1, color: '#A9E903' },
+  { value:     29.2, color: '#A9E903' },
+  { value:     29.3, color: '#AAEA02' },
+  { value:     29.4, color: '#AAEA02' },
+  { value:     29.5, color: '#ABEA02' },
+  { value:     29.6, color: '#ACEA02' },
+  { value:     29.7, color: '#ACEA01' },
+  { value:     29.8, color: '#ADEA01' },
+  { value:     29.9, color: '#ADEA00' },
+  { value:       30, color: '#AEEA00' },
+  { value:     30.1, color: '#AEEA00' },
+  { value:     30.2, color: '#AFEA00' },
+  { value:     30.3, color: '#AFEA00' },
+  { value:     30.4, color: '#B0EA00' },
+  { value:     30.5, color: '#B0EA00' },
+  { value:     30.6, color: '#B0EA00' },
+  { value:     30.7, color: '#B0EA00' },
+  { value:     30.8, color: '#B1E900' },
+  { value:     30.9, color: '#B1E900' },
+  { value:       31, color: '#B1E900' },
+  { value:     31.1, color: '#B1E900' },
+  { value:     31.2, color: '#B1E900' },
+  { value:     31.3, color: '#B2E900' },
+  { value:     31.4, color: '#B2E900' },
+  { value:     31.5, color: '#B2E900' },
+  { value:     31.6, color: '#B2E900' },
+  { value:     31.7, color: '#B2E900' },
+  { value:     31.8, color: '#B3E900' },
+  { value:     31.9, color: '#B3E900' },
+  { value:       32, color: '#B3E900' },
+  { value:     32.1, color: '#B3E900' },
+  { value:     32.2, color: '#B3E900' },
+  { value:     32.3, color: '#B4E800' },
+  { value:     32.4, color: '#B4E800' },
+  { value:     32.5, color: '#B4E800' },
+  { value:     32.6, color: '#B4E800' },
+  { value:     32.7, color: '#B5E800' },
+  { value:     32.8, color: '#B5E800' },
+  { value:     32.9, color: '#B6E800' },
+  { value:       33, color: '#B6E800' },
+  { value:     33.1, color: '#B6E800' },
+  { value:     33.2, color: '#B7E800' },
+  { value:     33.3, color: '#B7E800' },
+  { value:     33.4, color: '#B8E800' },
+  { value:     33.5, color: '#B8E800' },
+  { value:     33.6, color: '#B8E800' },
+  { value:     33.7, color: '#B8E800' },
+  { value:     33.8, color: '#B9E700' },
+  { value:     33.9, color: '#B9E700' },
+  { value:       34, color: '#B9E700' },
+  { value:     34.1, color: '#B9E700' },
+  { value:     34.2, color: '#B9E700' },
+  { value:     34.3, color: '#BAE600' },
+  { value:     34.4, color: '#BAE600' },
+  { value:     34.5, color: '#BAE600' },
+  { value:     34.6, color: '#BAE600' },
+  { value:     34.7, color: '#BBE600' },
+  { value:     34.8, color: '#BBE600' },
+  { value:     34.9, color: '#BCE600' },
+  { value:       35, color: '#BCE600' },
+  { value:     35.1, color: '#BCE600' },
+  { value:     35.2, color: '#BCE600' },
+  { value:     35.3, color: '#BDE600' },
+  { value:     35.4, color: '#BDE600' },
+  { value:     35.5, color: '#BDE600' },
+  { value:     35.6, color: '#BDE600' },
+  { value:     35.7, color: '#BDE600' },
+  { value:     35.8, color: '#BEE600' },
+  { value:     35.9, color: '#BEE600' },
+  { value:       36, color: '#BEE600' },
+  { value:     36.1, color: '#BEE600' },
+  { value:     36.2, color: '#BFE600' },
+  { value:     36.3, color: '#BFE600' },
+  { value:     36.4, color: '#C0E600' },
+  { value:     36.5, color: '#C0E600' },
+  { value:     36.6, color: '#C0E600' },
+  { value:     36.7, color: '#C0E600' },
+  { value:     36.8, color: '#C1E500' },
+  { value:     36.9, color: '#C1E500' },
+  { value:       37, color: '#C1E500' },
+  { value:     37.1, color: '#C1E500' },
+  { value:     37.2, color: '#C1E500' },
+  { value:     37.3, color: '#C2E400' },
+  { value:     37.4, color: '#C2E400' },
+  { value:     37.5, color: '#C2E400' },
+  { value:     37.6, color: '#C2E400' },
+  { value:     37.7, color: '#C3E400' },
+  { value:     37.8, color: '#C3E400' },
+  { value:     37.9, color: '#C4E400' },
+  { value:       38, color: '#C4E400' },
+  { value:     38.1, color: '#C4E400' },
+  { value:     38.2, color: '#C4E400' },
+  { value:     38.3, color: '#C5E400' },
+  { value:     38.4, color: '#C5E400' },
+  { value:     38.5, color: '#C5E400' },
+  { value:     38.6, color: '#C5E400' },
+  { value:     38.7, color: '#C5E400' },
+  { value:     38.8, color: '#C6E400' },
+  { value:     38.9, color: '#C6E400' },
+  { value:       39, color: '#C6E400' },
+  { value:     39.1, color: '#C6E400' },
+  { value:     39.2, color: '#C7E400' },
+  { value:     39.3, color: '#C7E400' },
+  { value:     39.4, color: '#C8E400' },
+  { value:     39.5, color: '#C8E400' },
+  { value:     39.6, color: '#C8E400' },
+  { value:     39.7, color: '#C8E400' },
+  { value:     39.8, color: '#C9E300' },
+  { value:     39.9, color: '#C9E300' },
+  { value:       40, color: '#C9E300' },
+  { value:     40.1, color: '#C9E300' },
+  { value:     40.2, color: '#C9E300' },
+  { value:     40.3, color: '#CAE200' },
+  { value:     40.4, color: '#CAE200' },
+  { value:     40.5, color: '#CAE200' },
+  { value:     40.6, color: '#CAE200' },
+  { value:     40.7, color: '#CBE200' },
+  { value:     40.8, color: '#CBE200' },
+  { value:     40.9, color: '#CCE200' },
+  { value:       41, color: '#CCE200' },
+  { value:     41.1, color: '#CCE200' },
+  { value:     41.2, color: '#CCE200' },
+  { value:     41.3, color: '#CDE200' },
+  { value:     41.4, color: '#CDE200' },
+  { value:     41.5, color: '#CDE200' },
+  { value:     41.6, color: '#CDE200' },
+  { value:     41.7, color: '#CDE200' },
+  { value:     41.8, color: '#CEE200' },
+  { value:     41.9, color: '#CEE200' },
+  { value:       42, color: '#CEE200' },
+  { value:     42.1, color: '#CEE200' },
+  { value:     42.2, color: '#CFE200' },
+  { value:     42.3, color: '#CFE200' },
+  { value:     42.4, color: '#D0E200' },
+  { value:     42.5, color: '#D0E200' },
+  { value:     42.6, color: '#D0E200' },
+  { value:     42.7, color: '#D0E200' },
+  { value:     42.8, color: '#D1E100' },
+  { value:     42.9, color: '#D1E100' },
+  { value:       43, color: '#D1E100' },
+  { value:     43.1, color: '#D1E100' },
+  { value:     43.2, color: '#D1E100' },
+  { value:     43.3, color: '#D2E100' },
+  { value:     43.4, color: '#D2E100' },
+  { value:     43.5, color: '#D2E100' },
+  { value:     43.6, color: '#D2E100' },
+  { value:     43.7, color: '#D3E100' },
+  { value:     43.8, color: '#D3E100' },
+  { value:     43.9, color: '#D4E100' },
+  { value:       44, color: '#D4E100' },
+  { value:     44.1, color: '#D4E100' },
+  { value:     44.2, color: '#D4E100' },
+  { value:     44.3, color: '#D5E000' },
+  { value:     44.4, color: '#D5E000' },
+  { value:     44.5, color: '#D5E000' },
+  { value:     44.6, color: '#D5E000' },
+  { value:     44.7, color: '#D5E000' },
+  { value:     44.8, color: '#D6E000' },
+  { value:     44.9, color: '#D6E000' },
+  { value:       45, color: '#D6E000' },
+  { value:     45.1, color: '#D6E000' },
+  { value:     45.2, color: '#D7E000' },
+  { value:     45.3, color: '#D7E000' },
+  { value:     45.4, color: '#D8E000' },
+  { value:     45.5, color: '#D8E000' },
+  { value:     45.6, color: '#D8E000' },
+  { value:     45.7, color: '#D8E000' },
+  { value:     45.8, color: '#D9DF00' },
+  { value:     45.9, color: '#D9DF00' },
+  { value:       46, color: '#D9DF00' },
+  { value:     46.1, color: '#D9DF00' },
+  { value:     46.2, color: '#D9DF00' },
+  { value:     46.3, color: '#DADF00' },
+  { value:     46.4, color: '#DADF00' },
+  { value:     46.5, color: '#DADF00' },
+  { value:     46.6, color: '#DADF00' },
+  { value:     46.7, color: '#DBDF00' },
+  { value:     46.8, color: '#DBDF00' },
+  { value:     46.9, color: '#DCDF00' },
+  { value:       47, color: '#DCDF00' },
+  { value:     47.1, color: '#DCDF00' },
+  { value:     47.2, color: '#DDDF00' },
+  { value:     47.3, color: '#DDDE00' },
+  { value:     47.4, color: '#DEDE00' },
+  { value:     47.5, color: '#DEDE00' },
+  { value:     47.6, color: '#DEDE00' },
+  { value:     47.7, color: '#DEDE00' },
+  { value:     47.8, color: '#DFDE00' },
+  { value:     47.9, color: '#DFDE00' },
+  { value:       48, color: '#DFDE00' },
+  { value:     48.1, color: '#DFDE00' },
+  { value:     48.2, color: '#DFDE00' },
+  { value:     48.3, color: '#E0DE00' },
+  { value:     48.4, color: '#E0DE00' },
+  { value:     48.5, color: '#E0DE00' },
+  { value:     48.6, color: '#E0DE00' },
+  { value:     48.7, color: '#E0DE00' },
+  { value:     48.8, color: '#E1DE00' },
+  { value:     48.9, color: '#E1DE00' },
+  { value:       49, color: '#E1DE00' },
+  { value:     49.1, color: '#E1DE00' },
+  { value:     49.2, color: '#E1DE00' },
+  { value:     49.3, color: '#E2DE00' },
+  { value:     49.4, color: '#E2DE00' },
+  { value:     49.5, color: '#E2DE00' },
+  { value:     49.6, color: '#E2DE00' },
+  { value:     49.7, color: '#E3DE00' },
+  { value:     49.8, color: '#E3DD00' },
+  { value:     49.9, color: '#E4DD00' },
+  { value:       50, color: '#E4DD00' },
+  { value:     50.1, color: '#E4DD00' },
+  { value:     50.2, color: '#E5DD00' },
+  { value:     50.3, color: '#E5DC00' },
+  { value:     50.4, color: '#E6DC00' },
+  { value:     50.5, color: '#E6DC00' },
+  { value:     50.6, color: '#E6DC00' },
+  { value:     50.7, color: '#E6DC00' },
+  { value:     50.8, color: '#E7DC00' },
+  { value:     50.9, color: '#E7DC00' },
+  { value:       51, color: '#E7DC00' },
+  { value:     51.1, color: '#E7DC00' },
+  { value:     51.2, color: '#E7DC00' },
+  { value:     51.3, color: '#E8DC00' },
+  { value:     51.4, color: '#E8DC00' },
+  { value:     51.5, color: '#E8DC00' },
+  { value:     51.6, color: '#E8DC00' },
+  { value:     51.7, color: '#E8DC00' },
+  { value:     51.8, color: '#E9DC00' },
+  { value:     51.9, color: '#E9DC00' },
+  { value:       52, color: '#E9DC00' },
+  { value:     52.1, color: '#E9DC00' },
+  { value:     52.2, color: '#E9DC00' },
+  { value:     52.3, color: '#EADC00' },
+  { value:     52.4, color: '#EADC00' },
+  { value:     52.5, color: '#EADC00' },
+  { value:     52.6, color: '#EADC00' },
+  { value:     52.7, color: '#EBDC00' },
+  { value:     52.8, color: '#EBDB00' },
+  { value:     52.9, color: '#ECDB00' },
+  { value:       53, color: '#ECDB00' },
+  { value:     53.1, color: '#ECDB00' },
+  { value:     53.2, color: '#EDDB00' },
+  { value:     53.3, color: '#EDDA00' },
+  { value:     53.4, color: '#EEDA00' },
+  { value:     53.5, color: '#EEDA00' },
+  { value:     53.6, color: '#EEDA00' },
+  { value:     53.7, color: '#EEDA00' },
+  { value:     53.8, color: '#EFDA00' },
+  { value:     53.9, color: '#EFDA00' },
+  { value:       54, color: '#EFDA00' },
+  { value:     54.1, color: '#EFDA00' },
+  { value:     54.2, color: '#EFDA00' },
+  { value:     54.3, color: '#F0DA00' },
+  { value:     54.4, color: '#F0DA00' },
+  { value:     54.5, color: '#F0DA00' },
+  { value:     54.6, color: '#F0DA00' },
+  { value:     54.7, color: '#F1DA00' },
+  { value:     54.8, color: '#F1DA00' },
+  { value:     54.9, color: '#F2DA00' },
+  { value:       55, color: '#F2DA00' },
+  { value:     55.1, color: '#F2DA00' },
+  { value:     55.2, color: '#F2DA00' },
+  { value:     55.3, color: '#F3DA00' },
+  { value:     55.4, color: '#F3DA00' },
+  { value:     55.5, color: '#F3DA00' },
+  { value:     55.6, color: '#F3DA00' },
+  { value:     55.7, color: '#F3DA00' },
+  { value:     55.8, color: '#F4D900' },
+  { value:     55.9, color: '#F4D900' },
+  { value:       56, color: '#F4D900' },
+  { value:     56.1, color: '#F4D900' },
+  { value:     56.2, color: '#F5D900' },
+  { value:     56.3, color: '#F5D800' },
+  { value:     56.4, color: '#F6D800' },
+  { value:     56.5, color: '#F6D800' },
+  { value:     56.6, color: '#F6D800' },
+  { value:     56.7, color: '#F6D800' },
+  { value:     56.8, color: '#F7D800' },
+  { value:     56.9, color: '#F7D800' },
+  { value:       57, color: '#F7D800' },
+  { value:     57.1, color: '#F7D800' },
+  { value:     57.2, color: '#F7D800' },
+  { value:     57.3, color: '#F8D800' },
+  { value:     57.4, color: '#F8D800' },
+  { value:     57.5, color: '#F8D800' },
+  { value:     57.6, color: '#F8D800' },
+  { value:     57.7, color: '#F9D800' },
+  { value:     57.8, color: '#F9D700' },
+  { value:     57.9, color: '#FAD700' },
+  { value:       58, color: '#FAD700' },
+  { value:     58.1, color: '#FAD700' },
+  { value:     58.2, color: '#FAD700' },
+  { value:     58.3, color: '#FBD700' },
+  { value:     58.4, color: '#FBD700' },
+  { value:     58.5, color: '#FBD700' },
+  { value:     58.6, color: '#FBD700' },
+  { value:     58.7, color: '#FBD700' },
+  { value:     58.8, color: '#FCD700' },
+  { value:     58.9, color: '#FCD700' },
+  { value:       59, color: '#FCD700' },
+  { value:     59.1, color: '#FCD700' },
+  { value:     59.2, color: '#FDD700' },
+  { value:     59.3, color: '#FDD600' },
+  { value:     59.4, color: '#FED600' },
+  { value:     59.5, color: '#FED600' },
+  { value:     59.6, color: '#FED600' },
+  { value:     59.7, color: '#FED600' },
+  { value:     59.8, color: '#FFD600' },
+  { value:     59.9, color: '#FFD600' },
+  { value:       60, color: '#FFD600' },
+  { value:     60.1, color: '#FFD600' },
+  { value:     60.2, color: '#FFD500' },
+  { value:     60.3, color: '#FFD500' },
+  { value:     60.4, color: '#FFD400' },
+  { value:     60.5, color: '#FFD400' },
+  { value:     60.6, color: '#FFD400' },
+  { value:     60.7, color: '#FFD300' },
+  { value:     60.8, color: '#FFD300' },
+  { value:     60.9, color: '#FFD200' },
+  { value:       61, color: '#FFD200' },
+  { value:     61.1, color: '#FFD200' },
+  { value:     61.2, color: '#FFD100' },
+  { value:     61.3, color: '#FFD100' },
+  { value:     61.4, color: '#FFD000' },
+  { value:     61.5, color: '#FFD000' },
+  { value:     61.6, color: '#FFD000' },
+  { value:     61.7, color: '#FFD000' },
+  { value:     61.8, color: '#FFCF00' },
+  { value:     61.9, color: '#FFCF00' },
+  { value:       62, color: '#FFCF00' },
+  { value:     62.1, color: '#FFCF00' },
+  { value:     62.2, color: '#FFCF00' },
+  { value:     62.3, color: '#FFCE00' },
+  { value:     62.4, color: '#FFCE00' },
+  { value:     62.5, color: '#FFCE00' },
+  { value:     62.6, color: '#FFCE00' },
+  { value:     62.7, color: '#FFCD00' },
+  { value:     62.8, color: '#FFCD00' },
+  { value:     62.9, color: '#FFCC00' },
+  { value:       63, color: '#FFCC00' },
+  { value:     63.1, color: '#FFCC00' },
+  { value:     63.2, color: '#FFCB00' },
+  { value:     63.3, color: '#FFCB00' },
+  { value:     63.4, color: '#FFCA00' },
+  { value:     63.5, color: '#FFCA00' },
+  { value:     63.6, color: '#FFCA00' },
+  { value:     63.7, color: '#FFC900' },
+  { value:     63.8, color: '#FFC900' },
+  { value:     63.9, color: '#FFC800' },
+  { value:       64, color: '#FFC800' },
+  { value:     64.1, color: '#FFC800' },
+  { value:     64.2, color: '#FFC700' },
+  { value:     64.3, color: '#FFC700' },
+  { value:     64.4, color: '#FFC600' },
+  { value:     64.5, color: '#FFC600' },
+  { value:     64.6, color: '#FFC600' },
+  { value:     64.7, color: '#FFC500' },
+  { value:     64.8, color: '#FFC500' },
+  { value:     64.9, color: '#FFC400' },
+  { value:       65, color: '#FFC400' },
+  { value:     65.1, color: '#FFC400' },
+  { value:     65.2, color: '#FFC300' },
+  { value:     65.3, color: '#FFC300' },
+  { value:     65.4, color: '#FFC200' },
+  { value:     65.5, color: '#FFC200' },
+  { value:     65.6, color: '#FFC200' },
+  { value:     65.7, color: '#FFC200' },
+  { value:     65.8, color: '#FFC100' },
+  { value:     65.9, color: '#FFC100' },
+  { value:       66, color: '#FFC100' },
+  { value:     66.1, color: '#FFC100' },
+  { value:     66.2, color: '#FFC100' },
+  { value:     66.3, color: '#FFC000' },
+  { value:     66.4, color: '#FFC000' },
+  { value:     66.5, color: '#FFC000' },
+  { value:     66.6, color: '#FFC000' },
+  { value:     66.7, color: '#FFBF00' },
+  { value:     66.8, color: '#FFBF00' },
+  { value:     66.9, color: '#FFBE00' },
+  { value:       67, color: '#FFBE00' },
+  { value:     67.1, color: '#FFBE00' },
+  { value:     67.2, color: '#FFBD00' },
+  { value:     67.3, color: '#FFBD00' },
+  { value:     67.4, color: '#FFBC00' },
+  { value:     67.5, color: '#FFBC00' },
+  { value:     67.6, color: '#FFBC00' },
+  { value:     67.7, color: '#FFBB00' },
+  { value:     67.8, color: '#FFBB00' },
+  { value:     67.9, color: '#FFBA00' },
+  { value:       68, color: '#FFBA00' },
+  { value:     68.1, color: '#FFBA00' },
+  { value:     68.2, color: '#FFB900' },
+  { value:     68.3, color: '#FFB900' },
+  { value:     68.4, color: '#FFB800' },
+  { value:     68.5, color: '#FFB800' },
+  { value:     68.6, color: '#FFB800' },
+  { value:     68.7, color: '#FFB700' },
+  { value:     68.8, color: '#FFB700' },
+  { value:     68.9, color: '#FFB600' },
+  { value:       69, color: '#FFB600' },
+  { value:     69.1, color: '#FFB600' },
+  { value:     69.2, color: '#FFB500' },
+  { value:     69.3, color: '#FFB500' },
+  { value:     69.4, color: '#FFB400' },
+  { value:     69.5, color: '#FFB400' },
+  { value:     69.6, color: '#FFB400' },
+  { value:     69.7, color: '#FFB400' },
+  { value:     69.8, color: '#FFB300' },
+  { value:     69.9, color: '#FFB300' },
+  { value:       70, color: '#FFB300' },
+  { value:     70.1, color: '#FFB300' },
+  { value:     70.2, color: '#FFB300' },
+  { value:     70.3, color: '#FFB200' },
+  { value:     70.4, color: '#FFB200' },
+  { value:     70.5, color: '#FFB200' },
+  { value:     70.6, color: '#FFB200' },
+  { value:     70.7, color: '#FFB100' },
+  { value:     70.8, color: '#FFB100' },
+  { value:     70.9, color: '#FFB000' },
+  { value:       71, color: '#FFB000' },
+  { value:     71.1, color: '#FFB000' },
+  { value:     71.2, color: '#FFAF00' },
+  { value:     71.3, color: '#FFAF00' },
+  { value:     71.4, color: '#FFAE00' },
+  { value:     71.5, color: '#FFAE00' },
+  { value:     71.6, color: '#FFAE00' },
+  { value:     71.7, color: '#FFAD00' },
+  { value:     71.8, color: '#FFAD00' },
+  { value:     71.9, color: '#FFAC00' },
+  { value:       72, color: '#FFAC00' },
+  { value:     72.1, color: '#FFAC00' },
+  { value:     72.2, color: '#FFAB00' },
+  { value:     72.3, color: '#FFAB00' },
+  { value:     72.4, color: '#FFAA00' },
+  { value:     72.5, color: '#FFAA00' },
+  { value:     72.6, color: '#FFAA00' },
+  { value:     72.7, color: '#FFA900' },
+  { value:     72.8, color: '#FFA900' },
+  { value:     72.9, color: '#FFA800' },
+  { value:       73, color: '#FFA800' },
+  { value:     73.1, color: '#FFA800' },
+  { value:     73.2, color: '#FFA700' },
+  { value:     73.3, color: '#FFA700' },
+  { value:     73.4, color: '#FFA600' },
+  { value:     73.5, color: '#FFA600' },
+  { value:     73.6, color: '#FFA600' },
+  { value:     73.7, color: '#FFA600' },
+  { value:     73.8, color: '#FFA500' },
+  { value:     73.9, color: '#FFA500' },
+  { value:       74, color: '#FFA500' },
+  { value:     74.1, color: '#FFA500' },
+  { value:     74.2, color: '#FFA500' },
+  { value:     74.3, color: '#FFA400' },
+  { value:     74.4, color: '#FFA400' },
+  { value:     74.5, color: '#FFA400' },
+  { value:     74.6, color: '#FFA400' },
+  { value:     74.7, color: '#FFA300' },
+  { value:     74.8, color: '#FFA300' },
+  { value:     74.9, color: '#FFA200' },
+  { value:       75, color: '#FFA200' },
+  { value:     75.1, color: '#FFA200' },
+  { value:     75.2, color: '#FFA100' },
+  { value:     75.3, color: '#FFA100' },
+  { value:     75.4, color: '#FFA000' },
+  { value:     75.5, color: '#FFA000' },
+  { value:     75.6, color: '#FFA000' },
+  { value:     75.7, color: '#FF9F00' },
+  { value:     75.8, color: '#FF9F00' },
+  { value:     75.9, color: '#FF9E00' },
+  { value:       76, color: '#FF9E00' },
+  { value:     76.1, color: '#FF9E00' },
+  { value:     76.2, color: '#FF9D00' },
+  { value:     76.3, color: '#FF9D00' },
+  { value:     76.4, color: '#FF9C00' },
+  { value:     76.5, color: '#FF9C00' },
+  { value:     76.6, color: '#FF9C00' },
+  { value:     76.7, color: '#FF9B00' },
+  { value:     76.8, color: '#FF9B00' },
+  { value:     76.9, color: '#FF9A00' },
+  { value:       77, color: '#FF9A00' },
+  { value:     77.1, color: '#FF9A00' },
+  { value:     77.2, color: '#FF9900' },
+  { value:     77.3, color: '#FF9900' },
+  { value:     77.4, color: '#FF9800' },
+  { value:     77.5, color: '#FF9800' },
+  { value:     77.6, color: '#FF9800' },
+  { value:     77.7, color: '#FF9800' },
+  { value:     77.8, color: '#FF9700' },
+  { value:     77.9, color: '#FF9700' },
+  { value:       78, color: '#FF9700' },
+  { value:     78.1, color: '#FF9700' },
+  { value:     78.2, color: '#FF9700' },
+  { value:     78.3, color: '#FF9600' },
+  { value:     78.4, color: '#FF9600' },
+  { value:     78.5, color: '#FF9600' },
+  { value:     78.6, color: '#FF9600' },
+  { value:     78.7, color: '#FF9500' },
+  { value:     78.8, color: '#FF9500' },
+  { value:     78.9, color: '#FF9400' },
+  { value:       79, color: '#FF9400' },
+  { value:     79.1, color: '#FF9400' },
+  { value:     79.2, color: '#FF9300' },
+  { value:     79.3, color: '#FF9300' },
+  { value:     79.4, color: '#FF9200' },
+  { value:     79.5, color: '#FF9200' },
+  { value:     79.6, color: '#FF9200' },
+  { value:     79.7, color: '#FF9100' },
+  { value:     79.8, color: '#FF9100' },
+  { value:     79.9, color: '#FF9000' },
+  { value:       80, color: '#FF9000' },
+  { value:     80.1, color: '#FF9000' },
+  { value:     80.2, color: '#FF8F00' },
+  { value:     80.3, color: '#FF8F00' },
+  { value:     80.4, color: '#FF8E00' },
+  { value:     80.5, color: '#FF8E00' },
+  { value:     80.6, color: '#FF8E00' },
+  { value:     80.7, color: '#FF8D00' },
+  { value:     80.8, color: '#FF8D00' },
+  { value:     80.9, color: '#FF8C00' },
+  { value:       81, color: '#FF8C00' },
+  { value:     81.1, color: '#FF8C00' },
+  { value:     81.2, color: '#FF8B00' },
+  { value:     81.3, color: '#FF8B00' },
+  { value:     81.4, color: '#FF8A00' },
+  { value:     81.5, color: '#FF8A00' },
+  { value:     81.6, color: '#FF8A00' },
+  { value:     81.7, color: '#FF8A00' },
+  { value:     81.8, color: '#FF8900' },
+  { value:     81.9, color: '#FF8900' },
+  { value:       82, color: '#FF8900' },
+  { value:     82.1, color: '#FF8900' },
+  { value:     82.2, color: '#FF8900' },
+  { value:     82.3, color: '#FF8800' },
+  { value:     82.4, color: '#FF8800' },
+  { value:     82.5, color: '#FF8800' },
+  { value:     82.6, color: '#FF8800' },
+  { value:     82.7, color: '#FF8700' },
+  { value:     82.8, color: '#FF8700' },
+  { value:     82.9, color: '#FF8600' },
+  { value:       83, color: '#FF8600' },
+  { value:     83.1, color: '#FF8600' },
+  { value:     83.2, color: '#FF8500' },
+  { value:     83.3, color: '#FF8500' },
+  { value:     83.4, color: '#FF8400' },
+  { value:     83.5, color: '#FF8400' },
+  { value:     83.6, color: '#FF8400' },
+  { value:     83.7, color: '#FF8300' },
+  { value:     83.8, color: '#FF8300' },
+  { value:     83.9, color: '#FF8200' },
+  { value:       84, color: '#FF8200' },
+  { value:     84.1, color: '#FF8200' },
+  { value:     84.2, color: '#FF8100' },
+  { value:     84.3, color: '#FF8100' },
+  { value:     84.4, color: '#FF8000' },
+  { value:     84.5, color: '#FF8000' },
+  { value:     84.6, color: '#FF8000' },
+  { value:     84.7, color: '#FF7F00' },
+  { value:     84.8, color: '#FF7F00' },
+  { value:     84.9, color: '#FF7E00' },
+  { value:       85, color: '#FF7E00' },
+  { value:     85.1, color: '#FF7E00' },
+  { value:     85.2, color: '#FF7D00' },
+  { value:     85.3, color: '#FF7D00' },
+  { value:     85.4, color: '#FF7C00' },
+  { value:     85.5, color: '#FF7C00' },
+  { value:     85.6, color: '#FF7C00' },
+  { value:     85.7, color: '#FF7C00' },
+  { value:     85.8, color: '#FF7B00' },
+  { value:     85.9, color: '#FF7B00' },
+  { value:       86, color: '#FF7B00' },
+  { value:     86.1, color: '#FF7B00' },
+  { value:     86.2, color: '#FF7B00' },
+  { value:     86.3, color: '#FF7A00' },
+  { value:     86.4, color: '#FF7A00' },
+  { value:     86.5, color: '#FF7A00' },
+  { value:     86.6, color: '#FF7A00' },
+  { value:     86.7, color: '#FF7900' },
+  { value:     86.8, color: '#FF7900' },
+  { value:     86.9, color: '#FF7800' },
+  { value:       87, color: '#FF7800' },
+  { value:     87.1, color: '#FF7800' },
+  { value:     87.2, color: '#FF7700' },
+  { value:     87.3, color: '#FF7700' },
+  { value:     87.4, color: '#FF7600' },
+  { value:     87.5, color: '#FF7600' },
+  { value:     87.6, color: '#FF7600' },
+  { value:     87.7, color: '#FF7500' },
+  { value:     87.8, color: '#FF7500' },
+  { value:     87.9, color: '#FF7400' },
+  { value:       88, color: '#FF7400' },
+  { value:     88.1, color: '#FF7400' },
+  { value:     88.2, color: '#FF7300' },
+  { value:     88.3, color: '#FF7300' },
+  { value:     88.4, color: '#FF7200' },
+  { value:     88.5, color: '#FF7200' },
+  { value:     88.6, color: '#FF7200' },
+  { value:     88.7, color: '#FF7100' },
+  { value:     88.8, color: '#FF7100' },
+  { value:     88.9, color: '#FF7000' },
+  { value:       89, color: '#FF7000' },
+  { value:     89.1, color: '#FF7000' },
+  { value:     89.2, color: '#FF6F00' },
+  { value:     89.3, color: '#FF6F00' },
+  { value:     89.4, color: '#FF6E00' },
+  { value:     89.5, color: '#FF6E00' },
+  { value:     89.6, color: '#FF6E00' },
+  { value:     89.7, color: '#FF6E00' },
+  { value:     89.8, color: '#FF6D00' },
+  { value:     89.9, color: '#FF6D00' },
+  { value:       90, color: '#FF6D00' },
+  { value:     90.1, color: '#FF6D00' },
+  { value:     90.2, color: '#FF6D00' },
+  { value:     90.3, color: '#FE6C00' },
+  { value:     90.4, color: '#FE6C00' },
+  { value:     90.5, color: '#FE6C00' },
+  { value:     90.6, color: '#FE6C00' },
+  { value:     90.7, color: '#FE6C00' },
+  { value:     90.8, color: '#FE6B00' },
+  { value:     90.9, color: '#FE6B00' },
+  { value:       91, color: '#FE6B00' },
+  { value:     91.1, color: '#FE6B00' },
+  { value:     91.2, color: '#FE6B00' },
+  { value:     91.3, color: '#FE6A00' },
+  { value:     91.4, color: '#FE6A00' },
+  { value:     91.5, color: '#FE6A00' },
+  { value:     91.6, color: '#FE6A00' },
+  { value:     91.7, color: '#FE6A00' },
+  { value:     91.8, color: '#FD6900' },
+  { value:     91.9, color: '#FD6900' },
+  { value:       92, color: '#FD6900' },
+  { value:     92.1, color: '#FD6900' },
+  { value:     92.2, color: '#FD6900' },
+  { value:     92.3, color: '#FC6800' },
+  { value:     92.4, color: '#FC6800' },
+  { value:     92.5, color: '#FC6800' },
+  { value:     92.6, color: '#FC6800' },
+  { value:     92.7, color: '#FC6700' },
+  { value:     92.8, color: '#FC6700' },
+  { value:     92.9, color: '#FC6600' },
+  { value:       93, color: '#FC6600' },
+  { value:     93.1, color: '#FC6600' },
+  { value:     93.2, color: '#FC6600' },
+  { value:     93.3, color: '#FC6500' },
+  { value:     93.4, color: '#FC6500' },
+  { value:     93.5, color: '#FC6500' },
+  { value:     93.6, color: '#FC6500' },
+  { value:     93.7, color: '#FC6500' },
+  { value:     93.8, color: '#FB6400' },
+  { value:     93.9, color: '#FB6400' },
+  { value:       94, color: '#FB6400' },
+  { value:     94.1, color: '#FB6400' },
+  { value:     94.2, color: '#FB6400' },
+  { value:     94.3, color: '#FA6300' },
+  { value:     94.4, color: '#FA6300' },
+  { value:     94.5, color: '#FA6300' },
+  { value:     94.6, color: '#FA6300' },
+  { value:     94.7, color: '#FA6300' },
+  { value:     94.8, color: '#FA6200' },
+  { value:     94.9, color: '#FA6200' },
+  { value:       95, color: '#FA6200' },
+  { value:     95.1, color: '#FA6200' },
+  { value:     95.2, color: '#FA6200' },
+  { value:     95.3, color: '#F96100' },
+  { value:     95.4, color: '#F96100' },
+  { value:     95.5, color: '#F96100' },
+  { value:     95.6, color: '#F96100' },
+  { value:     95.7, color: '#F96100' },
+  { value:     95.8, color: '#F86000' },
+  { value:     95.9, color: '#F86000' },
+  { value:       96, color: '#F86000' },
+  { value:     96.1, color: '#F86000' },
+  { value:     96.2, color: '#F86000' },
+  { value:     96.3, color: '#F85F00' },
+  { value:     96.4, color: '#F85F00' },
+  { value:     96.5, color: '#F85F00' },
+  { value:     96.6, color: '#F85F00' },
+  { value:     96.7, color: '#F85F00' },
+  { value:     96.8, color: '#F75E00' },
+  { value:     96.9, color: '#F75E00' },
+  { value:       97, color: '#F75E00' },
+  { value:     97.1, color: '#F75E00' },
+  { value:     97.2, color: '#F75D00' },
+  { value:     97.3, color: '#F65D00' },
+  { value:     97.4, color: '#F65C00' },
+  { value:     97.5, color: '#F65C00' },
+  { value:     97.6, color: '#F65C00' },
+  { value:     97.7, color: '#F65C00' },
+  { value:     97.8, color: '#F65B00' },
+  { value:     97.9, color: '#F65B00' },
+  { value:       98, color: '#F65B00' },
+  { value:     98.1, color: '#F65B00' },
+  { value:     98.2, color: '#F65B00' },
+  { value:     98.3, color: '#F65A00' },
+  { value:     98.4, color: '#F65A00' },
+  { value:     98.5, color: '#F65A00' },
+  { value:     98.6, color: '#F65A00' },
+  { value:     98.7, color: '#F65A00' },
+  { value:     98.8, color: '#F55900' },
+  { value:     98.9, color: '#F55900' },
+  { value:       99, color: '#F55900' },
+  { value:     99.1, color: '#F55900' },
+  { value:     99.2, color: '#F55900' },
+  { value:     99.3, color: '#F45800' },
+  { value:     99.4, color: '#F45800' },
+  { value:     99.5, color: '#F45800' },
+  { value:     99.6, color: '#F45800' },
+  { value:     99.7, color: '#F45800' },
+  { value:     99.8, color: '#F45700' },
+  { value:     99.9, color: '#F45700' },
+  { value:      100, color: '#F45700' },
+  { value:    100.1, color: '#F45700' },
+  { value:    100.2, color: '#F45700' },
+  { value:    100.3, color: '#F45600' },
+  { value:    100.4, color: '#F45600' },
+  { value:    100.5, color: '#F45600' },
+  { value:    100.6, color: '#F45600' },
+  { value:    100.7, color: '#F45600' },
+  { value:    100.8, color: '#F35500' },
+  { value:    100.9, color: '#F35500' },
+  { value:      101, color: '#F35500' },
+  { value:    101.1, color: '#F35500' },
+  { value:    101.2, color: '#F35500' },
+  { value:    101.3, color: '#F25400' },
+  { value:    101.4, color: '#F25400' },
+  { value:    101.5, color: '#F25400' },
+  { value:    101.6, color: '#F25400' },
+  { value:    101.7, color: '#F25400' },
+  { value:    101.8, color: '#F25300' },
+  { value:    101.9, color: '#F25300' },
+  { value:      102, color: '#F25300' },
+  { value:    102.1, color: '#F25300' },
+  { value:    102.2, color: '#F25300' },
+  { value:    102.3, color: '#F15200' },
+  { value:    102.4, color: '#F15200' },
+  { value:    102.5, color: '#F15200' },
+  { value:    102.6, color: '#F15200' },
+  { value:    102.7, color: '#F15200' },
+  { value:    102.8, color: '#F05100' },
+  { value:    102.9, color: '#F05100' },
+  { value:      103, color: '#F05100' },
+  { value:    103.1, color: '#F05100' },
+  { value:    103.2, color: '#F05100' },
+  { value:    103.3, color: '#F05000' },
+  { value:    103.4, color: '#F05000' },
+  { value:    103.5, color: '#F05000' },
+  { value:    103.6, color: '#F05000' },
+  { value:    103.7, color: '#F05000' },
+  { value:    103.8, color: '#EF4F00' },
+  { value:    103.9, color: '#EF4F00' },
+  { value:      104, color: '#EF4F00' },
+  { value:    104.1, color: '#EF4F00' },
+  { value:    104.2, color: '#EF4F00' },
+  { value:    104.3, color: '#EE4E00' },
+  { value:    104.4, color: '#EE4E00' },
+  { value:    104.5, color: '#EE4E00' },
+  { value:    104.6, color: '#EE4E00' },
+  { value:    104.7, color: '#EE4D00' },
+  { value:    104.8, color: '#EE4D00' },
+  { value:    104.9, color: '#EE4C00' },
+  { value:      105, color: '#EE4C00' },
+  { value:    105.1, color: '#EE4C00' },
+  { value:    105.2, color: '#EE4C00' },
+  { value:    105.3, color: '#EE4B00' },
+  { value:    105.4, color: '#EE4B00' },
+  { value:    105.5, color: '#EE4B00' },
+  { value:    105.6, color: '#EE4B00' },
+  { value:    105.7, color: '#EE4B00' },
+  { value:    105.8, color: '#ED4A00' },
+  { value:    105.9, color: '#ED4A00' },
+  { value:      106, color: '#ED4A00' },
+  { value:    106.1, color: '#ED4A00' },
+  { value:    106.2, color: '#ED4A00' },
+  { value:    106.3, color: '#EC4900' },
+  { value:    106.4, color: '#EC4900' },
+  { value:    106.5, color: '#EC4900' },
+  { value:    106.6, color: '#EC4900' },
+  { value:    106.7, color: '#EC4900' },
+  { value:    106.8, color: '#EC4800' },
+  { value:    106.9, color: '#EC4800' },
+  { value:      107, color: '#EC4800' },
+  { value:    107.1, color: '#EC4800' },
+  { value:    107.2, color: '#EC4800' },
+  { value:    107.3, color: '#EB4700' },
+  { value:    107.4, color: '#EB4700' },
+  { value:    107.5, color: '#EB4700' },
+  { value:    107.6, color: '#EB4700' },
+  { value:    107.7, color: '#EB4700' },
+  { value:    107.8, color: '#EA4600' },
+  { value:    107.9, color: '#EA4600' },
+  { value:      108, color: '#EA4600' },
+  { value:    108.1, color: '#EA4600' },
+  { value:    108.2, color: '#EA4600' },
+  { value:    108.3, color: '#EA4500' },
+  { value:    108.4, color: '#EA4500' },
+  { value:    108.5, color: '#EA4500' },
+  { value:    108.6, color: '#EA4500' },
+  { value:    108.7, color: '#EA4500' },
+  { value:    108.8, color: '#E94400' },
+  { value:    108.9, color: '#E94400' },
+  { value:      109, color: '#E94400' },
+  { value:    109.1, color: '#E94400' },
+  { value:    109.2, color: '#E94400' },
+  { value:    109.3, color: '#E84300' },
+  { value:    109.4, color: '#E84300' },
+  { value:    109.5, color: '#E84300' },
+  { value:    109.6, color: '#E84300' },
+  { value:    109.7, color: '#E84300' },
+  { value:    109.8, color: '#E84200' },
+  { value:    109.9, color: '#E84200' },
+  { value:      110, color: '#E84200' },
+  { value:    110.1, color: '#E84200' },
+  { value:    110.2, color: '#E84200' },
+  { value:    110.3, color: '#E84100' },
+  { value:    110.4, color: '#E84100' },
+  { value:    110.5, color: '#E84100' },
+  { value:    110.6, color: '#E84100' },
+  { value:    110.7, color: '#E84100' },
+  { value:    110.8, color: '#E74000' },
+  { value:    110.9, color: '#E74000' },
+  { value:      111, color: '#E74000' },
+  { value:    111.1, color: '#E74000' },
+  { value:    111.2, color: '#E74000' },
+  { value:    111.3, color: '#E63F00' },
+  { value:    111.4, color: '#E63F00' },
+  { value:    111.5, color: '#E63F00' },
+  { value:    111.6, color: '#E63F00' },
+  { value:    111.7, color: '#E63F00' },
+  { value:    111.8, color: '#E63E00' },
+  { value:    111.9, color: '#E63E00' },
+  { value:      112, color: '#E63E00' },
+  { value:    112.1, color: '#E63E00' },
+  { value:    112.2, color: '#E63D00' },
+  { value:    112.3, color: '#E63D00' },
+  { value:    112.4, color: '#E63C00' },
+  { value:    112.5, color: '#E63C00' },
+  { value:    112.6, color: '#E63C00' },
+  { value:    112.7, color: '#E63C00' },
+  { value:    112.8, color: '#E53B00' },
+  { value:    112.9, color: '#E53B00' },
+  { value:      113, color: '#E53B00' },
+  { value:    113.1, color: '#E53B00' },
+  { value:    113.2, color: '#E53B00' },
+  { value:    113.3, color: '#E43A00' },
+  { value:    113.4, color: '#E43A00' },
+  { value:    113.5, color: '#E43A00' },
+  { value:    113.6, color: '#E43A00' },
+  { value:    113.7, color: '#E43A00' },
+  { value:    113.8, color: '#E43900' },
+  { value:    113.9, color: '#E43900' },
+  { value:      114, color: '#E43900' },
+  { value:    114.1, color: '#E43900' },
+  { value:    114.2, color: '#E43900' },
+  { value:    114.3, color: '#E33800' },
+  { value:    114.4, color: '#E33800' },
+  { value:    114.5, color: '#E33800' },
+  { value:    114.6, color: '#E33800' },
+  { value:    114.7, color: '#E33800' },
+  { value:    114.8, color: '#E23700' },
+  { value:    114.9, color: '#E23700' },
+  { value:      115, color: '#E23700' },
+  { value:    115.1, color: '#E23700' },
+  { value:    115.2, color: '#E23700' },
+  { value:    115.3, color: '#E23600' },
+  { value:    115.4, color: '#E23600' },
+  { value:    115.5, color: '#E23600' },
+  { value:    115.6, color: '#E23600' },
+  { value:    115.7, color: '#E23600' },
+  { value:    115.8, color: '#E13500' },
+  { value:    115.9, color: '#E13500' },
+  { value:      116, color: '#E13500' },
+  { value:    116.1, color: '#E13500' },
+  { value:    116.2, color: '#E13500' },
+  { value:    116.3, color: '#E03400' },
+  { value:    116.4, color: '#E03400' },
+  { value:    116.5, color: '#E03400' },
+  { value:    116.6, color: '#E03400' },
+  { value:    116.7, color: '#E03400' },
+  { value:    116.8, color: '#E03300' },
+  { value:    116.9, color: '#E03300' },
+  { value:      117, color: '#E03300' },
+  { value:    117.1, color: '#E03300' },
+  { value:    117.2, color: '#E03300' },
+  { value:    117.3, color: '#E03200' },
+  { value:    117.4, color: '#E03200' },
+  { value:    117.5, color: '#E03200' },
+  { value:    117.6, color: '#E03200' },
+  { value:    117.7, color: '#E03100' },
+  { value:    117.8, color: '#DF3100' },
+  { value:    117.9, color: '#DF3000' },
+  { value:      118, color: '#DF3000' },
+  { value:    118.1, color: '#DF3000' },
+  { value:    118.2, color: '#DF3000' },
+  { value:    118.3, color: '#DE2F00' },
+  { value:    118.4, color: '#DE2F00' },
+  { value:    118.5, color: '#DE2F00' },
+  { value:    118.6, color: '#DE2F00' },
+  { value:    118.7, color: '#DE2F00' },
+  { value:    118.8, color: '#DE2E00' },
+  { value:    118.9, color: '#DE2E00' },
+  { value:      119, color: '#DE2E00' },
+  { value:    119.1, color: '#DE2E00' },
+  { value:    119.2, color: '#DE2E00' },
+  { value:    119.3, color: '#DE2D00' },
+  { value:    119.4, color: '#DE2D00' },
+  { value:    119.5, color: '#DE2D00' },
+  { value:    119.6, color: '#DE2D00' },
+  { value:    119.7, color: '#DE2D00' },
+  { value:    119.8, color: '#DD2C00' },
+  { value:    119.9, color: '#DD2C00' },
+  { value:      120, color: '#DD2C00' },
+  { value:    120.1, color: '#DC2C00' },
+  { value:    120.2, color: '#DC2C00' },
+  { value:    120.3, color: '#DB2B00' },
+  { value:    120.4, color: '#DB2B00' },
+  { value:    120.5, color: '#DA2B00' },
+  { value:    120.6, color: '#DA2B00' },
+  { value:    120.7, color: '#D92B00' },
+  { value:    120.8, color: '#D92A00' },
+  { value:    120.9, color: '#D82A00' },
+  { value:      121, color: '#D82A00' },
+  { value:    121.1, color: '#D82A00' },
+  { value:    121.2, color: '#D72A00' },
+  { value:    121.3, color: '#D72A00' },
+  { value:    121.4, color: '#D62A00' },
+  { value:    121.5, color: '#D62A00' },
+  { value:    121.6, color: '#D52A00' },
+  { value:    121.7, color: '#D52A00' },
+  { value:    121.8, color: '#D42900' },
+  { value:    121.9, color: '#D42900' },
+  { value:      122, color: '#D32900' },
+  { value:    122.1, color: '#D32900' },
+  { value:    122.2, color: '#D22900' },
+  { value:    122.3, color: '#D22800' },
+  { value:    122.4, color: '#D12800' },
+  { value:    122.5, color: '#D12800' },
+  { value:    122.6, color: '#D12800' },
+  { value:    122.7, color: '#D02800' },
+  { value:    122.8, color: '#D02800' },
+  { value:    122.9, color: '#CF2800' },
+  { value:      123, color: '#CF2800' },
+  { value:    123.1, color: '#CE2800' },
+  { value:    123.2, color: '#CE2800' },
+  { value:    123.3, color: '#CD2700' },
+  { value:    123.4, color: '#CD2700' },
+  { value:    123.5, color: '#CC2700' },
+  { value:    123.6, color: '#CC2700' },
+  { value:    123.7, color: '#CB2700' },
+  { value:    123.8, color: '#CB2600' },
+  { value:    123.9, color: '#CA2600' },
+  { value:      124, color: '#CA2600' },
+  { value:    124.1, color: '#CA2600' },
+  { value:    124.2, color: '#C92600' },
+  { value:    124.3, color: '#C92500' },
+  { value:    124.4, color: '#C82500' },
+  { value:    124.5, color: '#C82500' },
+  { value:    124.6, color: '#C72500' },
+  { value:    124.7, color: '#C72500' },
+  { value:    124.8, color: '#C62400' },
+  { value:    124.9, color: '#C62400' },
+  { value:      125, color: '#C52400' },
+  { value:    125.1, color: '#C42400' },
+  { value:    125.2, color: '#C42400' },
+  { value:    125.3, color: '#C32400' },
+  { value:    125.4, color: '#C32400' },
+  { value:    125.5, color: '#C22400' },
+  { value:    125.6, color: '#C22400' },
+  { value:    125.7, color: '#C12400' },
+  { value:    125.8, color: '#C12300' },
+  { value:    125.9, color: '#C02300' },
+  { value:      126, color: '#C02300' },
+  { value:    126.1, color: '#C02300' },
+  { value:    126.2, color: '#BF2300' },
+  { value:    126.3, color: '#BF2200' },
+  { value:    126.4, color: '#BE2200' },
+  { value:    126.5, color: '#BE2200' },
+  { value:    126.6, color: '#BD2200' },
+  { value:    126.7, color: '#BD2200' },
+  { value:    126.8, color: '#BC2200' },
+  { value:    126.9, color: '#BC2200' },
+  { value:      127, color: '#BB2200' },
+  { value:    127.1, color: '#BB2200' },
+  { value:    127.2, color: '#BA2200' },
+  { value:    127.3, color: '#BA2100' },
+  { value:    127.4, color: '#B92100' },
+  { value:    127.5, color: '#B92100' },
+  { value:    127.6, color: '#B92100' },
+  { value:    127.7, color: '#B82100' },
+  { value:    127.8, color: '#B82000' },
+  { value:    127.9, color: '#B72000' },
+  { value:      128, color: '#B72000' },
+  { value:    128.1, color: '#B62000' },
+  { value:    128.2, color: '#B62000' },
+  { value:    128.3, color: '#B51F00' },
+  { value:    128.4, color: '#B51F00' },
+  { value:    128.5, color: '#B41F00' },
+  { value:    128.6, color: '#B41F00' },
+  { value:    128.7, color: '#B31F00' },
+  { value:    128.8, color: '#B31E00' },
+  { value:    128.9, color: '#B21E00' },
+  { value:      129, color: '#B21E00' },
+  { value:    129.1, color: '#B21E00' },
+  { value:    129.2, color: '#B11E00' },
+  { value:    129.3, color: '#B11E00' },
+  { value:    129.4, color: '#B01E00' },
+  { value:    129.5, color: '#B01E00' },
+  { value:    129.6, color: '#AF1E00' },
+  { value:    129.7, color: '#AF1E00' },
+  { value:    129.8, color: '#AE1D00' },
+  { value:    129.9, color: '#AE1D00' },
+  { value:      130, color: '#AD1D00' },
+  { value:    130.1, color: '#AC1D00' },
+  { value:    130.2, color: '#AC1D00' },
+  { value:    130.3, color: '#AB1C00' },
+  { value:    130.4, color: '#AB1C00' },
+  { value:    130.5, color: '#AA1C00' },
+  { value:    130.6, color: '#AA1C00' },
+  { value:    130.7, color: '#A91C00' },
+  { value:    130.8, color: '#A91C00' },
+  { value:    130.9, color: '#A81C00' },
+  { value:      131, color: '#A81C00' },
+  { value:    131.1, color: '#A81C00' },
+  { value:    131.2, color: '#A71C00' },
+  { value:    131.3, color: '#A71B00' },
+  { value:    131.4, color: '#A61B00' },
+  { value:    131.5, color: '#A61B00' },
+  { value:    131.6, color: '#A61B00' },
+  { value:    131.7, color: '#A51B00' },
+  { value:    131.8, color: '#A51A00' },
+  { value:    131.9, color: '#A41A00' },
+  { value:      132, color: '#A41A00' },
+  { value:    132.1, color: '#A41A00' },
+  { value:    132.2, color: '#A31A00' },
+  { value:    132.3, color: '#A31A00' },
+  { value:    132.4, color: '#A21A00' },
+  { value:    132.5, color: '#A21A00' },
+  { value:    132.6, color: '#A11A00' },
+  { value:    132.7, color: '#A11A00' },
+  { value:    132.8, color: '#A01900' },
+  { value:    132.9, color: '#A01900' },
+  { value:      133, color: '#9F1900' },
+  { value:    133.1, color: '#9E1900' },
+  { value:    133.2, color: '#9E1900' },
+  { value:    133.3, color: '#9D1800' },
+  { value:    133.4, color: '#9D1800' },
+  { value:    133.5, color: '#9C1800' },
+  { value:    133.6, color: '#9C1800' },
+  { value:    133.7, color: '#9B1800' },
+  { value:    133.8, color: '#9B1700' },
+  { value:    133.9, color: '#9A1700' },
+  { value:      134, color: '#9A1700' },
+  { value:    134.1, color: '#9A1700' },
+  { value:    134.2, color: '#991700' },
+  { value:    134.3, color: '#991600' },
+  { value:    134.4, color: '#981600' },
+  { value:    134.5, color: '#981600' },
+  { value:    134.6, color: '#981600' },
+  { value:    134.7, color: '#971600' },
+  { value:    134.8, color: '#971600' },
+  { value:    134.9, color: '#961600' },
+  { value:      135, color: '#961600' },
+  { value:    135.1, color: '#961600' },
+  { value:    135.2, color: '#951600' },
+  { value:    135.3, color: '#951600' },
+  { value:    135.4, color: '#941600' },
+  { value:    135.5, color: '#941600' },
+  { value:    135.6, color: '#931600' },
+  { value:    135.7, color: '#931600' },
+  { value:    135.8, color: '#921500' },
+  { value:    135.9, color: '#921500' },
+  { value:      136, color: '#911500' },
+  { value:    136.1, color: '#901500' },
+  { value:    136.2, color: '#901500' },
+  { value:    136.3, color: '#8F1400' },
+  { value:    136.4, color: '#8F1400' },
+  { value:    136.5, color: '#8E1400' },
+  { value:    136.6, color: '#8E1400' },
+  { value:    136.7, color: '#8D1400' },
+  { value:    136.8, color: '#8D1300' },
+  { value:    136.9, color: '#8C1300' },
+  { value:      137, color: '#8C1300' },
+  { value:    137.1, color: '#8C1300' },
+  { value:    137.2, color: '#8B1300' },
+  { value:    137.3, color: '#8B1200' },
+  { value:    137.4, color: '#8A1200' },
+  { value:    137.5, color: '#8A1200' },
+  { value:    137.6, color: '#891200' },
+  { value:    137.7, color: '#891200' },
+  { value:    137.8, color: '#881200' },
+  { value:    137.9, color: '#881200' },
+  { value:      138, color: '#871200' },
+  { value:    138.1, color: '#871200' },
+  { value:    138.2, color: '#861200' },
+  { value:    138.3, color: '#861100' },
+  { value:    138.4, color: '#851100' },
+  { value:    138.5, color: '#851100' },
+  { value:    138.6, color: '#851100' },
+  { value:    138.7, color: '#841100' },
+  { value:    138.8, color: '#841000' },
+  { value:    138.9, color: '#831000' },
+  { value:      139, color: '#831000' },
+  { value:    139.1, color: '#821000' },
+  { value:    139.2, color: '#821000' },
+  { value:    139.3, color: '#811000' },
+  { value:    139.4, color: '#811000' },
+  { value:    139.5, color: '#801000' },
+  { value:    139.6, color: '#801000' },
+  { value:    139.7, color: '#7F1000' },
+  { value:    139.8, color: '#7F0F00' },
+  { value:    139.9, color: '#7E0F00' },
+  { value:      140, color: '#7E0F00' },
+  { value:    140.1, color: '#7E0F00' },
+  { value:    140.2, color: '#7D0F00' },
+  { value:    140.3, color: '#7D0E00' },
+  { value:    140.4, color: '#7C0E00' },
+  { value:    140.5, color: '#7C0E00' },
+  { value:    140.6, color: '#7B0E00' },
+  { value:    140.7, color: '#7B0E00' },
+  { value:    140.8, color: '#7A0E00' },
+  { value:    140.9, color: '#7A0E00' },
+  { value:      141, color: '#790E00' },
+  { value:    141.1, color: '#780E00' },
+  { value:    141.2, color: '#780E00' },
+  { value:    141.3, color: '#770D00' },
+  { value:    141.4, color: '#770D00' },
+  { value:    141.5, color: '#760D00' },
+  { value:    141.6, color: '#760D00' },
+  { value:    141.7, color: '#750D00' },
+  { value:    141.8, color: '#750C00' },
+  { value:    141.9, color: '#740C00' },
+  { value:      142, color: '#740C00' },
+  { value:    142.1, color: '#740C00' },
+  { value:    142.2, color: '#730C00' },
+  { value:    142.3, color: '#730B00' },
+  { value:    142.4, color: '#720B00' },
+  { value:    142.5, color: '#720B00' },
+  { value:    142.6, color: '#720B00' },
+  { value:    142.7, color: '#710B00' },
+  { value:    142.8, color: '#710A00' },
+  { value:    142.9, color: '#700A00' },
+  { value:      143, color: '#700A00' },
+  { value:    143.1, color: '#700A00' },
+  { value:    143.2, color: '#6F0A00' },
+  { value:    143.3, color: '#6F0A00' },
+  { value:    143.4, color: '#6E0A00' },
+  { value:    143.5, color: '#6E0A00' },
+  { value:    143.6, color: '#6D0A00' },
+  { value:    143.7, color: '#6D0A00' },
+  { value:    143.8, color: '#6C0900' },
+  { value:    143.9, color: '#6C0900' },
+  { value:      144, color: '#6B0900' },
+  { value:    144.1, color: '#6A0900' },
+  { value:    144.2, color: '#6A0900' },
+  { value:    144.3, color: '#690800' },
+  { value:    144.4, color: '#690800' },
+  { value:    144.5, color: '#680800' },
+  { value:    144.6, color: '#680800' },
+  { value:    144.7, color: '#670800' },
+  { value:    144.8, color: '#670800' },
+  { value:    144.9, color: '#660800' },
+  { value:      145, color: '#660800' },
+  { value:    145.1, color: '#660800' },
+  { value:    145.2, color: '#650800' },
+  { value:    145.3, color: '#650700' },
+  { value:    145.4, color: '#640700' },
+  { value:    145.5, color: '#640700' },
+  { value:    145.6, color: '#630700' },
+  { value:    145.7, color: '#630700' },
+  { value:    145.8, color: '#620600' },
+  { value:    145.9, color: '#620600' },
+  { value:      146, color: '#610600' },
+  { value:    146.1, color: '#600600' },
+  { value:    146.2, color: '#600600' },
+  { value:    146.3, color: '#5F0500' },
+  { value:    146.4, color: '#5F0500' },
+  { value:    146.5, color: '#5E0500' },
+  { value:    146.6, color: '#5E0500' },
+  { value:    146.7, color: '#5D0500' },
+  { value:    146.8, color: '#5D0400' },
+  { value:    146.9, color: '#5C0400' },
+  { value:      147, color: '#5C0400' },
+  { value:    147.1, color: '#5C0400' },
+  { value:    147.2, color: '#5B0400' },
+  { value:    147.3, color: '#5B0400' },
+  { value:    147.4, color: '#5A0400' },
+  { value:    147.5, color: '#5A0400' },
+  { value:    147.6, color: '#5A0400' },
+  { value:    147.7, color: '#590400' },
+  { value:    147.8, color: '#590300' },
+  { value:    147.9, color: '#580300' },
+  { value:      148, color: '#580300' },
+  { value:    148.1, color: '#580300' },
+  { value:    148.2, color: '#570300' },
+  { value:    148.3, color: '#570200' },
+  { value:    148.4, color: '#560200' },
+  { value:    148.5, color: '#560200' },
+  { value:    148.6, color: '#550200' },
+  { value:    148.7, color: '#550200' },
+  { value:    148.8, color: '#540200' },
+  { value:    148.9, color: '#540200' },
+  { value:      149, color: '#530200' },
+  { value:    149.1, color: '#520200' },
+  { value:    149.2, color: '#520200' },
+  { value:    149.3, color: '#510100' },
+  { value:    149.4, color: '#510100' },
+  { value:    149.5, color: '#500100' },
+  { value:    149.6, color: '#500100' },
+  { value:    149.7, color: '#4F0100' },
+  { value:    149.8, color: '#4F0000' },
+  { value:    149.9, color: '#4E0000' },
+  { value:      150, color: '#4E0000' },
   ],
-  // IWR observed (mm/day)
+  // ── IWR: 0 → 150 mm, step 0.1 (1501 stops) ─────────────────────────────────
   iwr: [
-    { value:  0, color: '#E0F7FA' }, { value:  1, color: '#B2EBF2' },
-    { value:  2, color: '#80DEEA' }, { value:  3, color: '#4DD0E1' },
-    { value:  4, color: '#26C6DA' }, { value:  5, color: '#00BCD4' },
-    { value:  6, color: '#0097A7' }, { value:  7, color: '#00796B' },
-    { value:  8, color: '#00695C' }, { value:  9, color: '#004D40' },
-    { value: 10, color: '#1A237E' },
+  // IWR  0→150    step 0.1  (1501 stops)
+  { value:        0, color: '#E0F7FA' },
+  { value:      0.1, color: '#DFF7FA' },
+  { value:      0.2, color: '#DEF7FA' },
+  { value:      0.3, color: '#DEF6FA' },
+  { value:      0.4, color: '#DDF6FA' },
+  { value:      0.5, color: '#DCF6FA' },
+  { value:      0.6, color: '#DBF6FA' },
+  { value:      0.7, color: '#DAF6FA' },
+  { value:      0.8, color: '#DAF5F9' },
+  { value:      0.9, color: '#D9F5F9' },
+  { value:        1, color: '#D8F5F9' },
+  { value:      1.1, color: '#D7F5F9' },
+  { value:      1.2, color: '#D6F5F9' },
+  { value:      1.3, color: '#D6F4F8' },
+  { value:      1.4, color: '#D5F4F8' },
+  { value:      1.5, color: '#D4F4F8' },
+  { value:      1.6, color: '#D3F4F8' },
+  { value:      1.7, color: '#D3F4F8' },
+  { value:      1.8, color: '#D2F3F7' },
+  { value:      1.9, color: '#D2F3F7' },
+  { value:        2, color: '#D1F3F7' },
+  { value:      2.1, color: '#D0F3F7' },
+  { value:      2.2, color: '#D0F3F7' },
+  { value:      2.3, color: '#CFF2F6' },
+  { value:      2.4, color: '#CFF2F6' },
+  { value:      2.5, color: '#CEF2F6' },
+  { value:      2.6, color: '#CDF2F6' },
+  { value:      2.7, color: '#CCF2F6' },
+  { value:      2.8, color: '#CCF1F6' },
+  { value:      2.9, color: '#CBF1F6' },
+  { value:        3, color: '#CAF1F6' },
+  { value:      3.1, color: '#C9F1F6' },
+  { value:      3.2, color: '#C8F1F6' },
+  { value:      3.3, color: '#C8F0F6' },
+  { value:      3.4, color: '#C7F0F6' },
+  { value:      3.5, color: '#C6F0F6' },
+  { value:      3.6, color: '#C5F0F6' },
+  { value:      3.7, color: '#C4F0F6' },
+  { value:      3.8, color: '#C4EFF5' },
+  { value:      3.9, color: '#C3EFF5' },
+  { value:        4, color: '#C2EFF5' },
+  { value:      4.1, color: '#C1EFF5' },
+  { value:      4.2, color: '#C0EFF5' },
+  { value:      4.3, color: '#C0EEF4' },
+  { value:      4.4, color: '#BFEEF4' },
+  { value:      4.5, color: '#BEEEF4' },
+  { value:      4.6, color: '#BDEEF4' },
+  { value:      4.7, color: '#BCEDF4' },
+  { value:      4.8, color: '#BCEDF4' },
+  { value:      4.9, color: '#BBECF4' },
+  { value:        5, color: '#BAECF4' },
+  { value:      5.1, color: '#B9ECF4' },
+  { value:      5.2, color: '#B8ECF4' },
+  { value:      5.3, color: '#B8EBF3' },
+  { value:      5.4, color: '#B7EBF3' },
+  { value:      5.5, color: '#B6EBF3' },
+  { value:      5.6, color: '#B5EBF3' },
+  { value:      5.7, color: '#B5EBF3' },
+  { value:      5.8, color: '#B4EAF2' },
+  { value:      5.9, color: '#B4EAF2' },
+  { value:        6, color: '#B3EAF2' },
+  { value:      6.1, color: '#B2EAF2' },
+  { value:      6.2, color: '#B2EAF2' },
+  { value:      6.3, color: '#B1E9F2' },
+  { value:      6.4, color: '#B1E9F2' },
+  { value:      6.5, color: '#B0E9F2' },
+  { value:      6.6, color: '#AFE9F2' },
+  { value:      6.7, color: '#AEE9F2' },
+  { value:      6.8, color: '#AEE8F1' },
+  { value:      6.9, color: '#ADE8F1' },
+  { value:        7, color: '#ACE8F1' },
+  { value:      7.1, color: '#ABE8F1' },
+  { value:      7.2, color: '#AAE8F1' },
+  { value:      7.3, color: '#AAE7F0' },
+  { value:      7.4, color: '#A9E7F0' },
+  { value:      7.5, color: '#A8E7F0' },
+  { value:      7.6, color: '#A7E7F0' },
+  { value:      7.7, color: '#A6E7F0' },
+  { value:      7.8, color: '#A6E6F0' },
+  { value:      7.9, color: '#A5E6F0' },
+  { value:        8, color: '#A4E6F0' },
+  { value:      8.1, color: '#A3E6F0' },
+  { value:      8.2, color: '#A2E6F0' },
+  { value:      8.3, color: '#A2E5EF' },
+  { value:      8.4, color: '#A1E5EF' },
+  { value:      8.5, color: '#A0E5EF' },
+  { value:      8.6, color: '#9FE5EF' },
+  { value:      8.7, color: '#9EE5EF' },
+  { value:      8.8, color: '#9EE4EE' },
+  { value:      8.9, color: '#9DE4EE' },
+  { value:        9, color: '#9CE4EE' },
+  { value:      9.1, color: '#9BE4EE' },
+  { value:      9.2, color: '#9AE4EE' },
+  { value:      9.3, color: '#9AE3EE' },
+  { value:      9.4, color: '#99E3EE' },
+  { value:      9.5, color: '#98E3EE' },
+  { value:      9.6, color: '#97E3EE' },
+  { value:      9.7, color: '#97E3EE' },
+  { value:      9.8, color: '#96E2ED' },
+  { value:      9.9, color: '#96E2ED' },
+  { value:       10, color: '#95E2ED' },
+  { value:     10.1, color: '#94E2ED' },
+  { value:     10.2, color: '#94E2ED' },
+  { value:     10.3, color: '#93E1EC' },
+  { value:     10.4, color: '#93E1EC' },
+  { value:     10.5, color: '#92E1EC' },
+  { value:     10.6, color: '#91E1EC' },
+  { value:     10.7, color: '#90E1EC' },
+  { value:     10.8, color: '#90E0EC' },
+  { value:     10.9, color: '#8FE0EC' },
+  { value:       11, color: '#8EE0EC' },
+  { value:     11.1, color: '#8DE0EC' },
+  { value:     11.2, color: '#8CE0EC' },
+  { value:     11.3, color: '#8CDFEC' },
+  { value:     11.4, color: '#8BDFEC' },
+  { value:     11.5, color: '#8ADFEC' },
+  { value:     11.6, color: '#89DFEC' },
+  { value:     11.7, color: '#88DFEC' },
+  { value:     11.8, color: '#88DEEB' },
+  { value:     11.9, color: '#87DEEB' },
+  { value:       12, color: '#86DEEB' },
+  { value:     12.1, color: '#85DEEB' },
+  { value:     12.2, color: '#84DEEB' },
+  { value:     12.3, color: '#84DDEA' },
+  { value:     12.4, color: '#83DDEA' },
+  { value:     12.5, color: '#82DDEA' },
+  { value:     12.6, color: '#81DDEA' },
+  { value:     12.7, color: '#81DDEA' },
+  { value:     12.8, color: '#80DCE9' },
+  { value:     12.9, color: '#80DCE9' },
+  { value:       13, color: '#7FDCE9' },
+  { value:     13.1, color: '#7EDCE9' },
+  { value:     13.2, color: '#7DDCE9' },
+  { value:     13.3, color: '#7DDBE8' },
+  { value:     13.4, color: '#7CDBE8' },
+  { value:     13.5, color: '#7BDBE8' },
+  { value:     13.6, color: '#7ADBE8' },
+  { value:     13.7, color: '#79DBE8' },
+  { value:     13.8, color: '#79DAE8' },
+  { value:     13.9, color: '#78DAE8' },
+  { value:       14, color: '#77DAE8' },
+  { value:     14.1, color: '#76DAE8' },
+  { value:     14.2, color: '#76DAE8' },
+  { value:     14.3, color: '#75D9E8' },
+  { value:     14.4, color: '#75D9E8' },
+  { value:     14.5, color: '#74D9E8' },
+  { value:     14.6, color: '#73D9E8' },
+  { value:     14.7, color: '#72D9E8' },
+  { value:     14.8, color: '#72D8E7' },
+  { value:     14.9, color: '#71D8E7' },
+  { value:       15, color: '#70D8E7' },
+  { value:     15.1, color: '#6FD8E7' },
+  { value:     15.2, color: '#6ED7E7' },
+  { value:     15.3, color: '#6ED7E6' },
+  { value:     15.4, color: '#6DD6E6' },
+  { value:     15.5, color: '#6CD6E6' },
+  { value:     15.6, color: '#6BD6E6' },
+  { value:     15.7, color: '#6BD6E6' },
+  { value:     15.8, color: '#6AD5E6' },
+  { value:     15.9, color: '#6AD5E6' },
+  { value:       16, color: '#69D5E6' },
+  { value:     16.1, color: '#68D5E6' },
+  { value:     16.2, color: '#67D5E6' },
+  { value:     16.3, color: '#67D4E6' },
+  { value:     16.4, color: '#66D4E6' },
+  { value:     16.5, color: '#65D4E6' },
+  { value:     16.6, color: '#64D4E6' },
+  { value:     16.7, color: '#63D4E6' },
+  { value:     16.8, color: '#63D3E5' },
+  { value:     16.9, color: '#62D3E5' },
+  { value:       17, color: '#61D3E5' },
+  { value:     17.1, color: '#60D3E5' },
+  { value:     17.2, color: '#60D3E5' },
+  { value:     17.3, color: '#5FD2E4' },
+  { value:     17.4, color: '#5FD2E4' },
+  { value:     17.5, color: '#5ED2E4' },
+  { value:     17.6, color: '#5DD2E4' },
+  { value:     17.7, color: '#5CD2E4' },
+  { value:     17.8, color: '#5CD1E3' },
+  { value:     17.9, color: '#5BD1E3' },
+  { value:       18, color: '#5AD1E3' },
+  { value:     18.1, color: '#59D1E3' },
+  { value:     18.2, color: '#58D1E3' },
+  { value:     18.3, color: '#58D0E2' },
+  { value:     18.4, color: '#57D0E2' },
+  { value:     18.5, color: '#56D0E2' },
+  { value:     18.6, color: '#55D0E2' },
+  { value:     18.7, color: '#54D0E2' },
+  { value:     18.8, color: '#54CFE2' },
+  { value:     18.9, color: '#53CFE2' },
+  { value:       19, color: '#52CFE2' },
+  { value:     19.1, color: '#51CFE2' },
+  { value:     19.2, color: '#50CFE2' },
+  { value:     19.3, color: '#50CEE2' },
+  { value:     19.4, color: '#4FCEE2' },
+  { value:     19.5, color: '#4ECEE2' },
+  { value:     19.6, color: '#4DCEE2' },
+  { value:     19.7, color: '#4DCEE2' },
+  { value:     19.8, color: '#4CCDE1' },
+  { value:     19.9, color: '#4CCDE1' },
+  { value:       20, color: '#4BCDE1' },
+  { value:     20.1, color: '#4ACDE1' },
+  { value:     20.2, color: '#4ACDE1' },
+  { value:     20.3, color: '#49CCE0' },
+  { value:     20.4, color: '#49CCE0' },
+  { value:     20.5, color: '#48CCE0' },
+  { value:     20.6, color: '#47CCE0' },
+  { value:     20.7, color: '#46CCE0' },
+  { value:     20.8, color: '#46CBE0' },
+  { value:     20.9, color: '#45CBE0' },
+  { value:       21, color: '#44CBE0' },
+  { value:     21.1, color: '#43CBE0' },
+  { value:     21.2, color: '#42CBE0' },
+  { value:     21.3, color: '#42CADF' },
+  { value:     21.4, color: '#41CADF' },
+  { value:     21.5, color: '#40CADF' },
+  { value:     21.6, color: '#3FCADF' },
+  { value:     21.7, color: '#3ECADF' },
+  { value:     21.8, color: '#3EC9DE' },
+  { value:     21.9, color: '#3DC9DE' },
+  { value:       22, color: '#3CC9DE' },
+  { value:     22.1, color: '#3BC9DE' },
+  { value:     22.2, color: '#3AC9DE' },
+  { value:     22.3, color: '#3AC8DE' },
+  { value:     22.4, color: '#39C8DE' },
+  { value:     22.5, color: '#38C8DE' },
+  { value:     22.6, color: '#37C8DE' },
+  { value:     22.7, color: '#36C8DE' },
+  { value:     22.8, color: '#36C7DD' },
+  { value:     22.9, color: '#35C7DD' },
+  { value:       23, color: '#34C7DD' },
+  { value:     23.1, color: '#33C7DD' },
+  { value:     23.2, color: '#32C7DD' },
+  { value:     23.3, color: '#32C6DC' },
+  { value:     23.4, color: '#31C6DC' },
+  { value:     23.5, color: '#30C6DC' },
+  { value:     23.6, color: '#2FC6DC' },
+  { value:     23.7, color: '#2FC6DC' },
+  { value:     23.8, color: '#2EC5DC' },
+  { value:     23.9, color: '#2EC5DC' },
+  { value:       24, color: '#2DC5DC' },
+  { value:     24.1, color: '#2CC5DC' },
+  { value:     24.2, color: '#2CC5DC' },
+  { value:     24.3, color: '#2BC4DB' },
+  { value:     24.4, color: '#2BC4DB' },
+  { value:     24.5, color: '#2AC4DB' },
+  { value:     24.6, color: '#29C4DB' },
+  { value:     24.7, color: '#28C3DB' },
+  { value:     24.8, color: '#28C3DA' },
+  { value:     24.9, color: '#27C2DA' },
+  { value:       25, color: '#26C2DA' },
+  { value:     25.1, color: '#25C2DA' },
+  { value:     25.2, color: '#24C2DA' },
+  { value:     25.3, color: '#24C1DA' },
+  { value:     25.4, color: '#23C1DA' },
+  { value:     25.5, color: '#22C1DA' },
+  { value:     25.6, color: '#21C1DA' },
+  { value:     25.7, color: '#20C1DA' },
+  { value:     25.8, color: '#20C0D9' },
+  { value:     25.9, color: '#1FC0D9' },
+  { value:       26, color: '#1EC0D9' },
+  { value:     26.1, color: '#1DC0D9' },
+  { value:     26.2, color: '#1CC0D9' },
+  { value:     26.3, color: '#1CBFD8' },
+  { value:     26.4, color: '#1BBFD8' },
+  { value:     26.5, color: '#1ABFD8' },
+  { value:     26.6, color: '#19BFD8' },
+  { value:     26.7, color: '#18BFD8' },
+  { value:     26.8, color: '#18BED8' },
+  { value:     26.9, color: '#17BED8' },
+  { value:       27, color: '#16BED8' },
+  { value:     27.1, color: '#15BED8' },
+  { value:     27.2, color: '#14BED8' },
+  { value:     27.3, color: '#14BDD8' },
+  { value:     27.4, color: '#13BDD8' },
+  { value:     27.5, color: '#12BDD8' },
+  { value:     27.6, color: '#11BDD8' },
+  { value:     27.7, color: '#11BDD8' },
+  { value:     27.8, color: '#10BCD7' },
+  { value:     27.9, color: '#10BCD7' },
+  { value:       28, color: '#0FBCD7' },
+  { value:     28.1, color: '#0EBCD7' },
+  { value:     28.2, color: '#0EBCD7' },
+  { value:     28.3, color: '#0DBBD6' },
+  { value:     28.4, color: '#0DBBD6' },
+  { value:     28.5, color: '#0CBBD6' },
+  { value:     28.6, color: '#0BBBD6' },
+  { value:     28.7, color: '#0ABBD6' },
+  { value:     28.8, color: '#0ABAD5' },
+  { value:     28.9, color: '#09BAD5' },
+  { value:       29, color: '#08BAD5' },
+  { value:     29.1, color: '#07BAD5' },
+  { value:     29.2, color: '#06BAD5' },
+  { value:     29.3, color: '#06B9D4' },
+  { value:     29.4, color: '#05B9D4' },
+  { value:     29.5, color: '#04B9D4' },
+  { value:     29.6, color: '#03B9D4' },
+  { value:     29.7, color: '#02B9D4' },
+  { value:     29.8, color: '#02B8D4' },
+  { value:     29.9, color: '#01B8D4' },
+  { value:       30, color: '#00B8D4' },
+  { value:     30.1, color: '#00B8D4' },
+  { value:     30.2, color: '#00B7D3' },
+  { value:     30.3, color: '#00B7D3' },
+  { value:     30.4, color: '#00B6D2' },
+  { value:     30.5, color: '#00B6D2' },
+  { value:     30.6, color: '#00B6D2' },
+  { value:     30.7, color: '#00B6D1' },
+  { value:     30.8, color: '#00B5D1' },
+  { value:     30.9, color: '#00B5D0' },
+  { value:       31, color: '#00B5D0' },
+  { value:     31.1, color: '#00B5D0' },
+  { value:     31.2, color: '#00B5CF' },
+  { value:     31.3, color: '#00B4CF' },
+  { value:     31.4, color: '#00B4CE' },
+  { value:     31.5, color: '#00B4CE' },
+  { value:     31.6, color: '#00B4CE' },
+  { value:     31.7, color: '#00B3CE' },
+  { value:     31.8, color: '#00B3CD' },
+  { value:     31.9, color: '#00B2CD' },
+  { value:       32, color: '#00B2CD' },
+  { value:     32.1, color: '#00B2CD' },
+  { value:     32.2, color: '#00B1CC' },
+  { value:     32.3, color: '#00B1CC' },
+  { value:     32.4, color: '#00B0CB' },
+  { value:     32.5, color: '#00B0CB' },
+  { value:     32.6, color: '#00B0CB' },
+  { value:     32.7, color: '#00B0CA' },
+  { value:     32.8, color: '#00AFCA' },
+  { value:     32.9, color: '#00AFC9' },
+  { value:       33, color: '#00AFC9' },
+  { value:     33.1, color: '#00AFC9' },
+  { value:     33.2, color: '#00AFC8' },
+  { value:     33.3, color: '#00AEC8' },
+  { value:     33.4, color: '#00AEC7' },
+  { value:     33.5, color: '#00AEC7' },
+  { value:     33.6, color: '#00AEC7' },
+  { value:     33.7, color: '#00ADC6' },
+  { value:     33.8, color: '#00ADC6' },
+  { value:     33.9, color: '#00ACC5' },
+  { value:       34, color: '#00ACC5' },
+  { value:     34.1, color: '#00ACC5' },
+  { value:     34.2, color: '#00ACC5' },
+  { value:     34.3, color: '#00ABC4' },
+  { value:     34.4, color: '#00ABC4' },
+  { value:     34.5, color: '#00ABC4' },
+  { value:     34.6, color: '#00ABC4' },
+  { value:     34.7, color: '#00ABC3' },
+  { value:     34.8, color: '#00AAC3' },
+  { value:     34.9, color: '#00AAC2' },
+  { value:       35, color: '#00AAC2' },
+  { value:     35.1, color: '#00AAC2' },
+  { value:     35.2, color: '#00A9C1' },
+  { value:     35.3, color: '#00A9C1' },
+  { value:     35.4, color: '#00A8C0' },
+  { value:     35.5, color: '#00A8C0' },
+  { value:     35.6, color: '#00A8C0' },
+  { value:     35.7, color: '#00A8BF' },
+  { value:     35.8, color: '#00A7BF' },
+  { value:     35.9, color: '#00A7BE' },
+  { value:       36, color: '#00A7BE' },
+  { value:     36.1, color: '#00A7BE' },
+  { value:     36.2, color: '#00A7BD' },
+  { value:     36.3, color: '#00A6BD' },
+  { value:     36.4, color: '#00A6BC' },
+  { value:     36.5, color: '#00A6BC' },
+  { value:     36.6, color: '#00A6BC' },
+  { value:     36.7, color: '#00A5BB' },
+  { value:     36.8, color: '#00A5BB' },
+  { value:     36.9, color: '#00A4BA' },
+  { value:       37, color: '#00A4BA' },
+  { value:     37.1, color: '#00A4BA' },
+  { value:     37.2, color: '#00A3B9' },
+  { value:     37.3, color: '#00A3B9' },
+  { value:     37.4, color: '#00A2B8' },
+  { value:     37.5, color: '#00A2B8' },
+  { value:     37.6, color: '#00A2B8' },
+  { value:     37.7, color: '#00A2B7' },
+  { value:     37.8, color: '#00A1B7' },
+  { value:     37.9, color: '#00A1B6' },
+  { value:       38, color: '#00A1B6' },
+  { value:     38.1, color: '#00A1B6' },
+  { value:     38.2, color: '#00A1B5' },
+  { value:     38.3, color: '#00A0B5' },
+  { value:     38.4, color: '#00A0B4' },
+  { value:     38.5, color: '#00A0B4' },
+  { value:     38.6, color: '#00A0B4' },
+  { value:     38.7, color: '#009FB4' },
+  { value:     38.8, color: '#009FB3' },
+  { value:     38.9, color: '#009EB3' },
+  { value:       39, color: '#009EB3' },
+  { value:     39.1, color: '#009EB3' },
+  { value:     39.2, color: '#009DB2' },
+  { value:     39.3, color: '#009DB2' },
+  { value:     39.4, color: '#009CB1' },
+  { value:     39.5, color: '#009CB1' },
+  { value:     39.6, color: '#009CB1' },
+  { value:     39.7, color: '#009CB0' },
+  { value:     39.8, color: '#009BB0' },
+  { value:     39.9, color: '#009BAF' },
+  { value:       40, color: '#009BAF' },
+  { value:     40.1, color: '#009BAF' },
+  { value:     40.2, color: '#009BAE' },
+  { value:     40.3, color: '#009AAE' },
+  { value:     40.4, color: '#009AAD' },
+  { value:     40.5, color: '#009AAD' },
+  { value:     40.6, color: '#009AAD' },
+  { value:     40.7, color: '#0099AC' },
+  { value:     40.8, color: '#0099AC' },
+  { value:     40.9, color: '#0098AB' },
+  { value:       41, color: '#0098AB' },
+  { value:     41.1, color: '#0098AB' },
+  { value:     41.2, color: '#0097AA' },
+  { value:     41.3, color: '#0097AA' },
+  { value:     41.4, color: '#0096A9' },
+  { value:     41.5, color: '#0096A9' },
+  { value:     41.6, color: '#0096A9' },
+  { value:     41.7, color: '#0096A8' },
+  { value:     41.8, color: '#0095A8' },
+  { value:     41.9, color: '#0095A7' },
+  { value:       42, color: '#0095A7' },
+  { value:     42.1, color: '#0095A7' },
+  { value:     42.2, color: '#0095A7' },
+  { value:     42.3, color: '#0094A6' },
+  { value:     42.4, color: '#0094A6' },
+  { value:     42.5, color: '#0094A6' },
+  { value:     42.6, color: '#0094A6' },
+  { value:     42.7, color: '#0093A5' },
+  { value:     42.8, color: '#0093A5' },
+  { value:     42.9, color: '#0092A4' },
+  { value:       43, color: '#0092A4' },
+  { value:     43.1, color: '#0092A4' },
+  { value:     43.2, color: '#0091A3' },
+  { value:     43.3, color: '#0091A3' },
+  { value:     43.4, color: '#0090A2' },
+  { value:     43.5, color: '#0090A2' },
+  { value:     43.6, color: '#0090A2' },
+  { value:     43.7, color: '#0090A1' },
+  { value:     43.8, color: '#008FA1' },
+  { value:     43.9, color: '#008FA0' },
+  { value:       44, color: '#008FA0' },
+  { value:     44.1, color: '#008FA0' },
+  { value:     44.2, color: '#008F9F' },
+  { value:     44.3, color: '#008E9F' },
+  { value:     44.4, color: '#008E9E' },
+  { value:     44.5, color: '#008E9E' },
+  { value:     44.6, color: '#008E9E' },
+  { value:     44.7, color: '#008D9D' },
+  { value:     44.8, color: '#008D9D' },
+  { value:     44.9, color: '#008C9C' },
+  { value:       45, color: '#008C9C' },
+  { value:     45.1, color: '#008C9C' },
+  { value:     45.2, color: '#008B9B' },
+  { value:     45.3, color: '#008B9B' },
+  { value:     45.4, color: '#008A9A' },
+  { value:     45.5, color: '#008A9A' },
+  { value:     45.6, color: '#008A9A' },
+  { value:     45.7, color: '#008A99' },
+  { value:     45.8, color: '#008999' },
+  { value:     45.9, color: '#008998' },
+  { value:       46, color: '#008998' },
+  { value:     46.1, color: '#008998' },
+  { value:     46.2, color: '#008997' },
+  { value:     46.3, color: '#008897' },
+  { value:     46.4, color: '#008896' },
+  { value:     46.5, color: '#008896' },
+  { value:     46.6, color: '#008896' },
+  { value:     46.7, color: '#008795' },
+  { value:     46.8, color: '#008795' },
+  { value:     46.9, color: '#008694' },
+  { value:       47, color: '#008694' },
+  { value:     47.1, color: '#008694' },
+  { value:     47.2, color: '#008593' },
+  { value:     47.3, color: '#008593' },
+  { value:     47.4, color: '#008492' },
+  { value:     47.5, color: '#008492' },
+  { value:     47.6, color: '#008492' },
+  { value:     47.7, color: '#008492' },
+  { value:     47.8, color: '#008391' },
+  { value:     47.9, color: '#008391' },
+  { value:       48, color: '#008391' },
+  { value:     48.1, color: '#008391' },
+  { value:     48.2, color: '#008390' },
+  { value:     48.3, color: '#008290' },
+  { value:     48.4, color: '#00828F' },
+  { value:     48.5, color: '#00828F' },
+  { value:     48.6, color: '#00828F' },
+  { value:     48.7, color: '#00818E' },
+  { value:     48.8, color: '#00818E' },
+  { value:     48.9, color: '#00808D' },
+  { value:       49, color: '#00808D' },
+  { value:     49.1, color: '#00808D' },
+  { value:     49.2, color: '#007F8C' },
+  { value:     49.3, color: '#007F8C' },
+  { value:     49.4, color: '#007E8B' },
+  { value:     49.5, color: '#007E8B' },
+  { value:     49.6, color: '#007E8B' },
+  { value:     49.7, color: '#007E8A' },
+  { value:     49.8, color: '#007D8A' },
+  { value:     49.9, color: '#007D89' },
+  { value:       50, color: '#007D89' },
+  { value:     50.1, color: '#007D89' },
+  { value:     50.2, color: '#007D88' },
+  { value:     50.3, color: '#007C88' },
+  { value:     50.4, color: '#007C87' },
+  { value:     50.5, color: '#007C87' },
+  { value:     50.6, color: '#007C87' },
+  { value:     50.7, color: '#007B86' },
+  { value:     50.8, color: '#007B86' },
+  { value:     50.9, color: '#007A85' },
+  { value:       51, color: '#007A85' },
+  { value:     51.1, color: '#007A85' },
+  { value:     51.2, color: '#007985' },
+  { value:     51.3, color: '#007984' },
+  { value:     51.4, color: '#007884' },
+  { value:     51.5, color: '#007884' },
+  { value:     51.6, color: '#007884' },
+  { value:     51.7, color: '#007883' },
+  { value:     51.8, color: '#007783' },
+  { value:     51.9, color: '#007782' },
+  { value:       52, color: '#007782' },
+  { value:     52.1, color: '#007782' },
+  { value:     52.2, color: '#007781' },
+  { value:     52.3, color: '#007681' },
+  { value:     52.4, color: '#007680' },
+  { value:     52.5, color: '#007680' },
+  { value:     52.6, color: '#007680' },
+  { value:     52.7, color: '#00757F' },
+  { value:     52.8, color: '#00757F' },
+  { value:     52.9, color: '#00747E' },
+  { value:       53, color: '#00747E' },
+  { value:     53.1, color: '#00747E' },
+  { value:     53.2, color: '#00737D' },
+  { value:     53.3, color: '#00737D' },
+  { value:     53.4, color: '#00727C' },
+  { value:     53.5, color: '#00727C' },
+  { value:     53.6, color: '#00727C' },
+  { value:     53.7, color: '#00727B' },
+  { value:     53.8, color: '#00717B' },
+  { value:     53.9, color: '#00717A' },
+  { value:       54, color: '#00717A' },
+  { value:     54.1, color: '#00717A' },
+  { value:     54.2, color: '#007179' },
+  { value:     54.3, color: '#007079' },
+  { value:     54.4, color: '#007078' },
+  { value:     54.5, color: '#007078' },
+  { value:     54.6, color: '#007078' },
+  { value:     54.7, color: '#006F77' },
+  { value:     54.8, color: '#006F77' },
+  { value:     54.9, color: '#006E76' },
+  { value:       55, color: '#006E76' },
+  { value:     55.1, color: '#006E76' },
+  { value:     55.2, color: '#006E75' },
+  { value:     55.3, color: '#006D75' },
+  { value:     55.4, color: '#006D74' },
+  { value:     55.5, color: '#006D74' },
+  { value:     55.6, color: '#006D74' },
+  { value:     55.7, color: '#006D74' },
+  { value:     55.8, color: '#006C73' },
+  { value:     55.9, color: '#006C73' },
+  { value:       56, color: '#006C73' },
+  { value:     56.1, color: '#006C73' },
+  { value:     56.2, color: '#006B72' },
+  { value:     56.3, color: '#006B72' },
+  { value:     56.4, color: '#006A71' },
+  { value:     56.5, color: '#006A71' },
+  { value:     56.6, color: '#006A71' },
+  { value:     56.7, color: '#006A70' },
+  { value:     56.8, color: '#006970' },
+  { value:     56.9, color: '#00696F' },
+  { value:       57, color: '#00696F' },
+  { value:     57.1, color: '#00696F' },
+  { value:     57.2, color: '#00696E' },
+  { value:     57.3, color: '#00686E' },
+  { value:     57.4, color: '#00686D' },
+  { value:     57.5, color: '#00686D' },
+  { value:     57.6, color: '#00686D' },
+  { value:     57.7, color: '#00676C' },
+  { value:     57.8, color: '#00676C' },
+  { value:     57.9, color: '#00666B' },
+  { value:       58, color: '#00666B' },
+  { value:     58.1, color: '#00666B' },
+  { value:     58.2, color: '#00656B' },
+  { value:     58.3, color: '#00656A' },
+  { value:     58.4, color: '#00646A' },
+  { value:     58.5, color: '#00646A' },
+  { value:     58.6, color: '#00646A' },
+  { value:     58.7, color: '#006469' },
+  { value:     58.8, color: '#006369' },
+  { value:     58.9, color: '#006368' },
+  { value:       59, color: '#006368' },
+  { value:     59.1, color: '#006368' },
+  { value:     59.2, color: '#006367' },
+  { value:     59.3, color: '#006267' },
+  { value:     59.4, color: '#006266' },
+  { value:     59.5, color: '#006266' },
+  { value:     59.6, color: '#006266' },
+  { value:     59.7, color: '#006165' },
+  { value:     59.8, color: '#006165' },
+  { value:     59.9, color: '#006064' },
+  { value:       60, color: '#006064' },
+  { value:     60.1, color: '#006064' },
+  { value:     60.2, color: '#006064' },
+  { value:     60.3, color: '#015F65' },
+  { value:     60.4, color: '#015F65' },
+  { value:     60.5, color: '#015F65' },
+  { value:     60.6, color: '#015F65' },
+  { value:     60.7, color: '#015F65' },
+  { value:     60.8, color: '#025E66' },
+  { value:     60.9, color: '#025E66' },
+  { value:       61, color: '#025E66' },
+  { value:     61.1, color: '#025E66' },
+  { value:     61.2, color: '#025D66' },
+  { value:     61.3, color: '#025D66' },
+  { value:     61.4, color: '#025C66' },
+  { value:     61.5, color: '#025C66' },
+  { value:     61.6, color: '#025C66' },
+  { value:     61.7, color: '#025C66' },
+  { value:     61.8, color: '#035B67' },
+  { value:     61.9, color: '#035B67' },
+  { value:       62, color: '#035B67' },
+  { value:     62.1, color: '#035B67' },
+  { value:     62.2, color: '#035B67' },
+  { value:     62.3, color: '#045A68' },
+  { value:     62.4, color: '#045A68' },
+  { value:     62.5, color: '#045A68' },
+  { value:     62.6, color: '#045A68' },
+  { value:     62.7, color: '#045A68' },
+  { value:     62.8, color: '#055968' },
+  { value:     62.9, color: '#055968' },
+  { value:       63, color: '#055968' },
+  { value:     63.1, color: '#055968' },
+  { value:     63.2, color: '#055968' },
+  { value:     63.3, color: '#065869' },
+  { value:     63.4, color: '#065869' },
+  { value:     63.5, color: '#065869' },
+  { value:     63.6, color: '#065869' },
+  { value:     63.7, color: '#065869' },
+  { value:     63.8, color: '#06576A' },
+  { value:     63.9, color: '#06576A' },
+  { value:       64, color: '#06576A' },
+  { value:     64.1, color: '#06576A' },
+  { value:     64.2, color: '#06576A' },
+  { value:     64.3, color: '#07566B' },
+  { value:     64.4, color: '#07566B' },
+  { value:     64.5, color: '#07566B' },
+  { value:     64.6, color: '#07566B' },
+  { value:     64.7, color: '#07556B' },
+  { value:     64.8, color: '#08556C' },
+  { value:     64.9, color: '#08546C' },
+  { value:       65, color: '#08546C' },
+  { value:     65.1, color: '#08546C' },
+  { value:     65.2, color: '#08546C' },
+  { value:     65.3, color: '#09536C' },
+  { value:     65.4, color: '#09536C' },
+  { value:     65.5, color: '#09536C' },
+  { value:     65.6, color: '#09536C' },
+  { value:     65.7, color: '#09536C' },
+  { value:     65.8, color: '#0A526D' },
+  { value:     65.9, color: '#0A526D' },
+  { value:       66, color: '#0A526D' },
+  { value:     66.1, color: '#0A526D' },
+  { value:     66.2, color: '#0A526D' },
+  { value:     66.3, color: '#0A516E' },
+  { value:     66.4, color: '#0A516E' },
+  { value:     66.5, color: '#0A516E' },
+  { value:     66.6, color: '#0A516E' },
+  { value:     66.7, color: '#0A516E' },
+  { value:     66.8, color: '#0B506E' },
+  { value:     66.9, color: '#0B506E' },
+  { value:       67, color: '#0B506E' },
+  { value:     67.1, color: '#0B506E' },
+  { value:     67.2, color: '#0B506E' },
+  { value:     67.3, color: '#0C4F6F' },
+  { value:     67.4, color: '#0C4F6F' },
+  { value:     67.5, color: '#0C4F6F' },
+  { value:     67.6, color: '#0C4F6F' },
+  { value:     67.7, color: '#0C4F6F' },
+  { value:     67.8, color: '#0D4E70' },
+  { value:     67.9, color: '#0D4E70' },
+  { value:       68, color: '#0D4E70' },
+  { value:     68.1, color: '#0D4E70' },
+  { value:     68.2, color: '#0D4D70' },
+  { value:     68.3, color: '#0E4D71' },
+  { value:     68.4, color: '#0E4C71' },
+  { value:     68.5, color: '#0E4C71' },
+  { value:     68.6, color: '#0E4C71' },
+  { value:     68.7, color: '#0E4C71' },
+  { value:     68.8, color: '#0E4B72' },
+  { value:     68.9, color: '#0E4B72' },
+  { value:       69, color: '#0E4B72' },
+  { value:     69.1, color: '#0E4B72' },
+  { value:     69.2, color: '#0E4B72' },
+  { value:     69.3, color: '#0F4A72' },
+  { value:     69.4, color: '#0F4A72' },
+  { value:     69.5, color: '#0F4A72' },
+  { value:     69.6, color: '#0F4A72' },
+  { value:     69.7, color: '#0F4A72' },
+  { value:     69.8, color: '#104973' },
+  { value:     69.9, color: '#104973' },
+  { value:       70, color: '#104973' },
+  { value:     70.1, color: '#104973' },
+  { value:     70.2, color: '#104973' },
+  { value:     70.3, color: '#114874' },
+  { value:     70.4, color: '#114874' },
+  { value:     70.5, color: '#114874' },
+  { value:     70.6, color: '#114874' },
+  { value:     70.7, color: '#114874' },
+  { value:     70.8, color: '#124775' },
+  { value:     70.9, color: '#124775' },
+  { value:       71, color: '#124775' },
+  { value:     71.1, color: '#124775' },
+  { value:     71.2, color: '#124775' },
+  { value:     71.3, color: '#124676' },
+  { value:     71.4, color: '#124676' },
+  { value:     71.5, color: '#124676' },
+  { value:     71.6, color: '#124676' },
+  { value:     71.7, color: '#124576' },
+  { value:     71.8, color: '#134576' },
+  { value:     71.9, color: '#134476' },
+  { value:       72, color: '#134476' },
+  { value:     72.1, color: '#134476' },
+  { value:     72.2, color: '#134476' },
+  { value:     72.3, color: '#144377' },
+  { value:     72.4, color: '#144377' },
+  { value:     72.5, color: '#144377' },
+  { value:     72.6, color: '#144377' },
+  { value:     72.7, color: '#144377' },
+  { value:     72.8, color: '#154278' },
+  { value:     72.9, color: '#154278' },
+  { value:       73, color: '#154278' },
+  { value:     73.1, color: '#154278' },
+  { value:     73.2, color: '#154278' },
+  { value:     73.3, color: '#164178' },
+  { value:     73.4, color: '#164178' },
+  { value:     73.5, color: '#164178' },
+  { value:     73.6, color: '#164178' },
+  { value:     73.7, color: '#164178' },
+  { value:     73.8, color: '#174079' },
+  { value:     73.9, color: '#174079' },
+  { value:       74, color: '#174079' },
+  { value:     74.1, color: '#174079' },
+  { value:     74.2, color: '#174079' },
+  { value:     74.3, color: '#183F7A' },
+  { value:     74.4, color: '#183F7A' },
+  { value:     74.5, color: '#183F7A' },
+  { value:     74.6, color: '#183F7A' },
+  { value:     74.7, color: '#183F7A' },
+  { value:     74.8, color: '#183E7B' },
+  { value:     74.9, color: '#183E7B' },
+  { value:       75, color: '#183E7B' },
+  { value:     75.1, color: '#183E7B' },
+  { value:     75.2, color: '#183D7B' },
+  { value:     75.3, color: '#193D7C' },
+  { value:     75.4, color: '#193C7C' },
+  { value:     75.5, color: '#193C7C' },
+  { value:     75.6, color: '#193C7C' },
+  { value:     75.7, color: '#193C7C' },
+  { value:     75.8, color: '#1A3B7D' },
+  { value:     75.9, color: '#1A3B7D' },
+  { value:       76, color: '#1A3B7D' },
+  { value:     76.1, color: '#1A3B7D' },
+  { value:     76.2, color: '#1A3B7D' },
+  { value:     76.3, color: '#1B3A7E' },
+  { value:     76.4, color: '#1B3A7E' },
+  { value:     76.5, color: '#1B3A7E' },
+  { value:     76.6, color: '#1B3A7E' },
+  { value:     76.7, color: '#1B3A7E' },
+  { value:     76.8, color: '#1C397E' },
+  { value:     76.9, color: '#1C397E' },
+  { value:       77, color: '#1C397E' },
+  { value:     77.1, color: '#1C397E' },
+  { value:     77.2, color: '#1C397E' },
+  { value:     77.3, color: '#1D387F' },
+  { value:     77.4, color: '#1D387F' },
+  { value:     77.5, color: '#1D387F' },
+  { value:     77.6, color: '#1D387F' },
+  { value:     77.7, color: '#1D387F' },
+  { value:     77.8, color: '#1E3780' },
+  { value:     77.9, color: '#1E3780' },
+  { value:       78, color: '#1E3780' },
+  { value:     78.1, color: '#1E3780' },
+  { value:     78.2, color: '#1E3780' },
+  { value:     78.3, color: '#1E3680' },
+  { value:     78.4, color: '#1E3680' },
+  { value:     78.5, color: '#1E3680' },
+  { value:     78.6, color: '#1E3680' },
+  { value:     78.7, color: '#1E3580' },
+  { value:     78.8, color: '#1F3581' },
+  { value:     78.9, color: '#1F3481' },
+  { value:       79, color: '#1F3481' },
+  { value:     79.1, color: '#1F3481' },
+  { value:     79.2, color: '#1F3481' },
+  { value:     79.3, color: '#203382' },
+  { value:     79.4, color: '#203382' },
+  { value:     79.5, color: '#203382' },
+  { value:     79.6, color: '#203382' },
+  { value:     79.7, color: '#203382' },
+  { value:     79.8, color: '#213283' },
+  { value:     79.9, color: '#213283' },
+  { value:       80, color: '#213283' },
+  { value:     80.1, color: '#213283' },
+  { value:     80.2, color: '#213283' },
+  { value:     80.3, color: '#223184' },
+  { value:     80.4, color: '#223184' },
+  { value:     80.5, color: '#223184' },
+  { value:     80.6, color: '#223184' },
+  { value:     80.7, color: '#223184' },
+  { value:     80.8, color: '#233084' },
+  { value:     80.9, color: '#233084' },
+  { value:       81, color: '#233084' },
+  { value:     81.1, color: '#233084' },
+  { value:     81.2, color: '#232F84' },
+  { value:     81.3, color: '#242F85' },
+  { value:     81.4, color: '#242E85' },
+  { value:     81.5, color: '#242E85' },
+  { value:     81.6, color: '#242E85' },
+  { value:     81.7, color: '#242E85' },
+  { value:     81.8, color: '#242D86' },
+  { value:     81.9, color: '#242D86' },
+  { value:       82, color: '#242D86' },
+  { value:     82.1, color: '#242D86' },
+  { value:     82.2, color: '#242D86' },
+  { value:     82.3, color: '#252C87' },
+  { value:     82.4, color: '#252C87' },
+  { value:     82.5, color: '#252C87' },
+  { value:     82.6, color: '#252C87' },
+  { value:     82.7, color: '#252C87' },
+  { value:     82.8, color: '#262B88' },
+  { value:     82.9, color: '#262B88' },
+  { value:       83, color: '#262B88' },
+  { value:     83.1, color: '#262B88' },
+  { value:     83.2, color: '#262B88' },
+  { value:     83.3, color: '#262A88' },
+  { value:     83.4, color: '#262A88' },
+  { value:     83.5, color: '#262A88' },
+  { value:     83.6, color: '#262A88' },
+  { value:     83.7, color: '#262A88' },
+  { value:     83.8, color: '#272989' },
+  { value:     83.9, color: '#272989' },
+  { value:       84, color: '#272989' },
+  { value:     84.1, color: '#272989' },
+  { value:     84.2, color: '#272989' },
+  { value:     84.3, color: '#28288A' },
+  { value:     84.4, color: '#28288A' },
+  { value:     84.5, color: '#28288A' },
+  { value:     84.6, color: '#28288A' },
+  { value:     84.7, color: '#28278A' },
+  { value:     84.8, color: '#29278A' },
+  { value:     84.9, color: '#29268A' },
+  { value:       85, color: '#29268A' },
+  { value:     85.1, color: '#29268A' },
+  { value:     85.2, color: '#29268A' },
+  { value:     85.3, color: '#2A258B' },
+  { value:     85.4, color: '#2A258B' },
+  { value:     85.5, color: '#2A258B' },
+  { value:     85.6, color: '#2A258B' },
+  { value:     85.7, color: '#2A258B' },
+  { value:     85.8, color: '#2B248C' },
+  { value:     85.9, color: '#2B248C' },
+  { value:       86, color: '#2B248C' },
+  { value:     86.1, color: '#2B248C' },
+  { value:     86.2, color: '#2B248C' },
+  { value:     86.3, color: '#2C238D' },
+  { value:     86.4, color: '#2C238D' },
+  { value:     86.5, color: '#2C238D' },
+  { value:     86.6, color: '#2C238D' },
+  { value:     86.7, color: '#2C238D' },
+  { value:     86.8, color: '#2C228E' },
+  { value:     86.9, color: '#2C228E' },
+  { value:       87, color: '#2C228E' },
+  { value:     87.1, color: '#2C228E' },
+  { value:     87.2, color: '#2C228E' },
+  { value:     87.3, color: '#2D218E' },
+  { value:     87.4, color: '#2D218E' },
+  { value:     87.5, color: '#2D218E' },
+  { value:     87.6, color: '#2D218E' },
+  { value:     87.7, color: '#2D218E' },
+  { value:     87.8, color: '#2E208F' },
+  { value:     87.9, color: '#2E208F' },
+  { value:       88, color: '#2E208F' },
+  { value:     88.1, color: '#2E208F' },
+  { value:     88.2, color: '#2E1F8F' },
+  { value:     88.3, color: '#2E1F90' },
+  { value:     88.4, color: '#2E1E90' },
+  { value:     88.5, color: '#2E1E90' },
+  { value:     88.6, color: '#2E1E90' },
+  { value:     88.7, color: '#2E1E90' },
+  { value:     88.8, color: '#2F1D90' },
+  { value:     88.9, color: '#2F1D90' },
+  { value:       89, color: '#2F1D90' },
+  { value:     89.1, color: '#2F1D90' },
+  { value:     89.2, color: '#2F1D90' },
+  { value:     89.3, color: '#301C91' },
+  { value:     89.4, color: '#301C91' },
+  { value:     89.5, color: '#301C91' },
+  { value:     89.6, color: '#301C91' },
+  { value:     89.7, color: '#301C91' },
+  { value:     89.8, color: '#311B92' },
+  { value:     89.9, color: '#311B92' },
+  { value:       90, color: '#311B92' },
+  { value:     90.1, color: '#311B92' },
+  { value:     90.2, color: '#311B92' },
+  { value:     90.3, color: '#321B92' },
+  { value:     90.4, color: '#321B92' },
+  { value:     90.5, color: '#321B92' },
+  { value:     90.6, color: '#321B92' },
+  { value:     90.7, color: '#331B92' },
+  { value:     90.8, color: '#331B92' },
+  { value:     90.9, color: '#341B92' },
+  { value:       91, color: '#341B92' },
+  { value:     91.1, color: '#341B92' },
+  { value:     91.2, color: '#341B92' },
+  { value:     91.3, color: '#351B92' },
+  { value:     91.4, color: '#351B92' },
+  { value:     91.5, color: '#351B92' },
+  { value:     91.6, color: '#351B92' },
+  { value:     91.7, color: '#351B92' },
+  { value:     91.8, color: '#361B93' },
+  { value:     91.9, color: '#361B93' },
+  { value:       92, color: '#361B93' },
+  { value:     92.1, color: '#361B93' },
+  { value:     92.2, color: '#361B93' },
+  { value:     92.3, color: '#371B94' },
+  { value:     92.4, color: '#371B94' },
+  { value:     92.5, color: '#371B94' },
+  { value:     92.6, color: '#371B94' },
+  { value:     92.7, color: '#371B94' },
+  { value:     92.8, color: '#381B94' },
+  { value:     92.9, color: '#381B94' },
+  { value:       93, color: '#381B94' },
+  { value:     93.1, color: '#381B94' },
+  { value:     93.2, color: '#391B94' },
+  { value:     93.3, color: '#391B94' },
+  { value:     93.4, color: '#3A1B94' },
+  { value:     93.5, color: '#3A1B94' },
+  { value:     93.6, color: '#3A1B94' },
+  { value:     93.7, color: '#3A1B94' },
+  { value:     93.8, color: '#3B1B94' },
+  { value:     93.9, color: '#3B1B94' },
+  { value:       94, color: '#3B1B94' },
+  { value:     94.1, color: '#3B1B94' },
+  { value:     94.2, color: '#3B1B94' },
+  { value:     94.3, color: '#3C1C94' },
+  { value:     94.4, color: '#3C1C94' },
+  { value:     94.5, color: '#3C1C94' },
+  { value:     94.6, color: '#3C1C94' },
+  { value:     94.7, color: '#3D1C94' },
+  { value:     94.8, color: '#3D1C94' },
+  { value:     94.9, color: '#3E1C94' },
+  { value:       95, color: '#3E1C94' },
+  { value:     95.1, color: '#3E1C94' },
+  { value:     95.2, color: '#3E1C94' },
+  { value:     95.3, color: '#3F1C94' },
+  { value:     95.4, color: '#3F1C94' },
+  { value:     95.5, color: '#3F1C94' },
+  { value:     95.6, color: '#3F1C94' },
+  { value:     95.7, color: '#3F1C94' },
+  { value:     95.8, color: '#401C95' },
+  { value:     95.9, color: '#401C95' },
+  { value:       96, color: '#401C95' },
+  { value:     96.1, color: '#401C95' },
+  { value:     96.2, color: '#401C95' },
+  { value:     96.3, color: '#411C96' },
+  { value:     96.4, color: '#411C96' },
+  { value:     96.5, color: '#411C96' },
+  { value:     96.6, color: '#411C96' },
+  { value:     96.7, color: '#411C96' },
+  { value:     96.8, color: '#421C96' },
+  { value:     96.9, color: '#421C96' },
+  { value:       97, color: '#421C96' },
+  { value:     97.1, color: '#421C96' },
+  { value:     97.2, color: '#431C96' },
+  { value:     97.3, color: '#431C96' },
+  { value:     97.4, color: '#441C96' },
+  { value:     97.5, color: '#441C96' },
+  { value:     97.6, color: '#441C96' },
+  { value:     97.7, color: '#441C96' },
+  { value:     97.8, color: '#451C96' },
+  { value:     97.9, color: '#451C96' },
+  { value:       98, color: '#451C96' },
+  { value:     98.1, color: '#451C96' },
+  { value:     98.2, color: '#451C96' },
+  { value:     98.3, color: '#461C96' },
+  { value:     98.4, color: '#461C96' },
+  { value:     98.5, color: '#461C96' },
+  { value:     98.6, color: '#461C96' },
+  { value:     98.7, color: '#471C96' },
+  { value:     98.8, color: '#471C96' },
+  { value:     98.9, color: '#481C96' },
+  { value:       99, color: '#481C96' },
+  { value:     99.1, color: '#481C96' },
+  { value:     99.2, color: '#481C96' },
+  { value:     99.3, color: '#491C96' },
+  { value:     99.4, color: '#491C96' },
+  { value:     99.5, color: '#491C96' },
+  { value:     99.6, color: '#491C96' },
+  { value:     99.7, color: '#491C96' },
+  { value:     99.8, color: '#4A1C97' },
+  { value:     99.9, color: '#4A1C97' },
+  { value:      100, color: '#4A1C97' },
+  { value:    100.1, color: '#4A1C97' },
+  { value:    100.2, color: '#4A1C97' },
+  { value:    100.3, color: '#4B1C98' },
+  { value:    100.4, color: '#4B1C98' },
+  { value:    100.5, color: '#4B1C98' },
+  { value:    100.6, color: '#4B1C98' },
+  { value:    100.7, color: '#4B1C98' },
+  { value:    100.8, color: '#4C1C98' },
+  { value:    100.9, color: '#4C1C98' },
+  { value:      101, color: '#4C1C98' },
+  { value:    101.1, color: '#4C1C98' },
+  { value:    101.2, color: '#4D1C98' },
+  { value:    101.3, color: '#4D1C98' },
+  { value:    101.4, color: '#4E1C98' },
+  { value:    101.5, color: '#4E1C98' },
+  { value:    101.6, color: '#4E1C98' },
+  { value:    101.7, color: '#4E1C98' },
+  { value:    101.8, color: '#4F1C98' },
+  { value:    101.9, color: '#4F1C98' },
+  { value:      102, color: '#4F1C98' },
+  { value:    102.1, color: '#4F1C98' },
+  { value:    102.2, color: '#4F1C98' },
+  { value:    102.3, color: '#501C98' },
+  { value:    102.4, color: '#501C98' },
+  { value:    102.5, color: '#501C98' },
+  { value:    102.6, color: '#501C98' },
+  { value:    102.7, color: '#501C98' },
+  { value:    102.8, color: '#511D99' },
+  { value:    102.9, color: '#511D99' },
+  { value:      103, color: '#511D99' },
+  { value:    103.1, color: '#511D99' },
+  { value:    103.2, color: '#511D99' },
+  { value:    103.3, color: '#521D99' },
+  { value:    103.4, color: '#521D99' },
+  { value:    103.5, color: '#521D99' },
+  { value:    103.6, color: '#521D99' },
+  { value:    103.7, color: '#531D99' },
+  { value:    103.8, color: '#531D99' },
+  { value:    103.9, color: '#541D99' },
+  { value:      104, color: '#541D99' },
+  { value:    104.1, color: '#541D99' },
+  { value:    104.2, color: '#541D99' },
+  { value:    104.3, color: '#551D9A' },
+  { value:    104.4, color: '#551D9A' },
+  { value:    104.5, color: '#551D9A' },
+  { value:    104.6, color: '#551D9A' },
+  { value:    104.7, color: '#551D9A' },
+  { value:    104.8, color: '#561D9A' },
+  { value:    104.9, color: '#561D9A' },
+  { value:      105, color: '#561D9A' },
+  { value:    105.1, color: '#561D9A' },
+  { value:    105.2, color: '#561D9A' },
+  { value:    105.3, color: '#571D9A' },
+  { value:    105.4, color: '#571D9A' },
+  { value:    105.5, color: '#571D9A' },
+  { value:    105.6, color: '#571D9A' },
+  { value:    105.7, color: '#571D9A' },
+  { value:    105.8, color: '#581D9B' },
+  { value:    105.9, color: '#581D9B' },
+  { value:      106, color: '#581D9B' },
+  { value:    106.1, color: '#581D9B' },
+  { value:    106.2, color: '#591D9B' },
+  { value:    106.3, color: '#591D9B' },
+  { value:    106.4, color: '#5A1D9B' },
+  { value:    106.5, color: '#5A1D9B' },
+  { value:    106.6, color: '#5A1D9B' },
+  { value:    106.7, color: '#5A1D9B' },
+  { value:    106.8, color: '#5B1D9B' },
+  { value:    106.9, color: '#5B1D9B' },
+  { value:      107, color: '#5B1D9B' },
+  { value:    107.1, color: '#5B1D9B' },
+  { value:    107.2, color: '#5B1D9B' },
+  { value:    107.3, color: '#5C1E9C' },
+  { value:    107.4, color: '#5C1E9C' },
+  { value:    107.5, color: '#5C1E9C' },
+  { value:    107.6, color: '#5C1E9C' },
+  { value:    107.7, color: '#5C1E9C' },
+  { value:    107.8, color: '#5D1E9C' },
+  { value:    107.9, color: '#5D1E9C' },
+  { value:      108, color: '#5D1E9C' },
+  { value:    108.1, color: '#5D1E9C' },
+  { value:    108.2, color: '#5D1E9C' },
+  { value:    108.3, color: '#5E1E9C' },
+  { value:    108.4, color: '#5E1E9C' },
+  { value:    108.5, color: '#5E1E9C' },
+  { value:    108.6, color: '#5E1E9C' },
+  { value:    108.7, color: '#5F1E9C' },
+  { value:    108.8, color: '#5F1E9C' },
+  { value:    108.9, color: '#601E9C' },
+  { value:      109, color: '#601E9C' },
+  { value:    109.1, color: '#601E9C' },
+  { value:    109.2, color: '#601E9C' },
+  { value:    109.3, color: '#611E9C' },
+  { value:    109.4, color: '#611E9C' },
+  { value:    109.5, color: '#611E9C' },
+  { value:    109.6, color: '#611E9C' },
+  { value:    109.7, color: '#611E9C' },
+  { value:    109.8, color: '#621E9D' },
+  { value:    109.9, color: '#621E9D' },
+  { value:      110, color: '#621E9D' },
+  { value:    110.1, color: '#621E9D' },
+  { value:    110.2, color: '#621E9D' },
+  { value:    110.3, color: '#631E9E' },
+  { value:    110.4, color: '#631E9E' },
+  { value:    110.5, color: '#631E9E' },
+  { value:    110.6, color: '#631E9E' },
+  { value:    110.7, color: '#631E9E' },
+  { value:    110.8, color: '#641E9E' },
+  { value:    110.9, color: '#641E9E' },
+  { value:      111, color: '#641E9E' },
+  { value:    111.1, color: '#641E9E' },
+  { value:    111.2, color: '#651E9E' },
+  { value:    111.3, color: '#651E9E' },
+  { value:    111.4, color: '#661E9E' },
+  { value:    111.5, color: '#661E9E' },
+  { value:    111.6, color: '#661E9E' },
+  { value:    111.7, color: '#661E9E' },
+  { value:    111.8, color: '#671E9E' },
+  { value:    111.9, color: '#671E9E' },
+  { value:      112, color: '#671E9E' },
+  { value:    112.1, color: '#671E9E' },
+  { value:    112.2, color: '#671E9E' },
+  { value:    112.3, color: '#681E9E' },
+  { value:    112.4, color: '#681E9E' },
+  { value:    112.5, color: '#681E9E' },
+  { value:    112.6, color: '#681E9E' },
+  { value:    112.7, color: '#691E9E' },
+  { value:    112.8, color: '#691E9E' },
+  { value:    112.9, color: '#6A1E9E' },
+  { value:      113, color: '#6A1E9E' },
+  { value:    113.1, color: '#6A1E9E' },
+  { value:    113.2, color: '#6A1E9E' },
+  { value:    113.3, color: '#6B1E9E' },
+  { value:    113.4, color: '#6B1E9E' },
+  { value:    113.5, color: '#6B1E9E' },
+  { value:    113.6, color: '#6B1E9E' },
+  { value:    113.7, color: '#6B1E9E' },
+  { value:    113.8, color: '#6C1E9F' },
+  { value:    113.9, color: '#6C1E9F' },
+  { value:      114, color: '#6C1E9F' },
+  { value:    114.1, color: '#6C1E9F' },
+  { value:    114.2, color: '#6C1E9F' },
+  { value:    114.3, color: '#6D1EA0' },
+  { value:    114.4, color: '#6D1EA0' },
+  { value:    114.5, color: '#6D1EA0' },
+  { value:    114.6, color: '#6D1EA0' },
+  { value:    114.7, color: '#6D1EA0' },
+  { value:    114.8, color: '#6E1EA0' },
+  { value:    114.9, color: '#6E1EA0' },
+  { value:      115, color: '#6E1EA0' },
+  { value:    115.1, color: '#6E1EA0' },
+  { value:    115.2, color: '#6F1EA0' },
+  { value:    115.3, color: '#6F1EA0' },
+  { value:    115.4, color: '#701EA0' },
+  { value:    115.5, color: '#701EA0' },
+  { value:    115.6, color: '#701EA0' },
+  { value:    115.7, color: '#701EA0' },
+  { value:    115.8, color: '#711FA0' },
+  { value:    115.9, color: '#711FA0' },
+  { value:      116, color: '#711FA0' },
+  { value:    116.1, color: '#711FA0' },
+  { value:    116.2, color: '#711FA0' },
+  { value:    116.3, color: '#721FA0' },
+  { value:    116.4, color: '#721FA0' },
+  { value:    116.5, color: '#721FA0' },
+  { value:    116.6, color: '#721FA0' },
+  { value:    116.7, color: '#731FA0' },
+  { value:    116.8, color: '#731FA0' },
+  { value:    116.9, color: '#741FA0' },
+  { value:      117, color: '#741FA0' },
+  { value:    117.1, color: '#741FA0' },
+  { value:    117.2, color: '#741FA0' },
+  { value:    117.3, color: '#751FA0' },
+  { value:    117.4, color: '#751FA0' },
+  { value:    117.5, color: '#751FA0' },
+  { value:    117.6, color: '#751FA0' },
+  { value:    117.7, color: '#751FA0' },
+  { value:    117.8, color: '#761FA1' },
+  { value:    117.9, color: '#761FA1' },
+  { value:      118, color: '#761FA1' },
+  { value:    118.1, color: '#761FA1' },
+  { value:    118.2, color: '#761FA1' },
+  { value:    118.3, color: '#771FA2' },
+  { value:    118.4, color: '#771FA2' },
+  { value:    118.5, color: '#771FA2' },
+  { value:    118.6, color: '#771FA2' },
+  { value:    118.7, color: '#771FA2' },
+  { value:    118.8, color: '#781FA2' },
+  { value:    118.9, color: '#781FA2' },
+  { value:      119, color: '#781FA2' },
+  { value:    119.1, color: '#781FA2' },
+  { value:    119.2, color: '#791FA2' },
+  { value:    119.3, color: '#791FA2' },
+  { value:    119.4, color: '#7A1FA2' },
+  { value:    119.5, color: '#7A1FA2' },
+  { value:    119.6, color: '#7A1FA2' },
+  { value:    119.7, color: '#7A1FA2' },
+  { value:    119.8, color: '#7B1FA2' },
+  { value:    119.9, color: '#7B1FA2' },
+  { value:      120, color: '#7B1FA2' },
+  { value:    120.1, color: '#7B1FA2' },
+  { value:    120.2, color: '#7C1FA2' },
+  { value:    120.3, color: '#7C1EA1' },
+  { value:    120.4, color: '#7D1EA1' },
+  { value:    120.5, color: '#7D1EA1' },
+  { value:    120.6, color: '#7D1EA1' },
+  { value:    120.7, color: '#7E1EA1' },
+  { value:    120.8, color: '#7E1EA0' },
+  { value:    120.9, color: '#7F1EA0' },
+  { value:      121, color: '#7F1EA0' },
+  { value:    121.1, color: '#7F1EA0' },
+  { value:    121.2, color: '#801E9F' },
+  { value:    121.3, color: '#801E9F' },
+  { value:    121.4, color: '#811E9E' },
+  { value:    121.5, color: '#811E9E' },
+  { value:    121.6, color: '#811E9E' },
+  { value:    121.7, color: '#821E9E' },
+  { value:    121.8, color: '#821D9D' },
+  { value:    121.9, color: '#831D9D' },
+  { value:      122, color: '#831D9D' },
+  { value:    122.1, color: '#831D9D' },
+  { value:    122.2, color: '#841D9D' },
+  { value:    122.3, color: '#841C9C' },
+  { value:    122.4, color: '#851C9C' },
+  { value:    122.5, color: '#851C9C' },
+  { value:    122.6, color: '#851C9C' },
+  { value:    122.7, color: '#861C9B' },
+  { value:    122.8, color: '#861C9B' },
+  { value:    122.9, color: '#871C9A' },
+  { value:      123, color: '#871C9A' },
+  { value:    123.1, color: '#871C9A' },
+  { value:    123.2, color: '#881C9A' },
+  { value:    123.3, color: '#881C99' },
+  { value:    123.4, color: '#891C99' },
+  { value:    123.5, color: '#891C99' },
+  { value:    123.6, color: '#891C99' },
+  { value:    123.7, color: '#8A1C99' },
+  { value:    123.8, color: '#8A1B98' },
+  { value:    123.9, color: '#8B1B98' },
+  { value:      124, color: '#8B1B98' },
+  { value:    124.1, color: '#8C1B98' },
+  { value:    124.2, color: '#8C1B98' },
+  { value:    124.3, color: '#8D1A97' },
+  { value:    124.4, color: '#8D1A97' },
+  { value:    124.5, color: '#8E1A97' },
+  { value:    124.6, color: '#8E1A97' },
+  { value:    124.7, color: '#8F1A97' },
+  { value:    124.8, color: '#8F1A96' },
+  { value:    124.9, color: '#901A96' },
+  { value:      125, color: '#901A96' },
+  { value:    125.1, color: '#901A96' },
+  { value:    125.2, color: '#911A95' },
+  { value:    125.3, color: '#911A95' },
+  { value:    125.4, color: '#921A94' },
+  { value:    125.5, color: '#921A94' },
+  { value:    125.6, color: '#921A94' },
+  { value:    125.7, color: '#931A94' },
+  { value:    125.8, color: '#931993' },
+  { value:    125.9, color: '#941993' },
+  { value:      126, color: '#941993' },
+  { value:    126.1, color: '#941993' },
+  { value:    126.2, color: '#951993' },
+  { value:    126.3, color: '#951892' },
+  { value:    126.4, color: '#961892' },
+  { value:    126.5, color: '#961892' },
+  { value:    126.6, color: '#961892' },
+  { value:    126.7, color: '#971891' },
+  { value:    126.8, color: '#971891' },
+  { value:    126.9, color: '#981890' },
+  { value:      127, color: '#981890' },
+  { value:    127.1, color: '#981890' },
+  { value:    127.2, color: '#991890' },
+  { value:    127.3, color: '#99188F' },
+  { value:    127.4, color: '#9A188F' },
+  { value:    127.5, color: '#9A188F' },
+  { value:    127.6, color: '#9A188F' },
+  { value:    127.7, color: '#9B188F' },
+  { value:    127.8, color: '#9B178E' },
+  { value:    127.9, color: '#9C178E' },
+  { value:      128, color: '#9C178E' },
+  { value:    128.1, color: '#9C178E' },
+  { value:    128.2, color: '#9D178E' },
+  { value:    128.3, color: '#9D168D' },
+  { value:    128.4, color: '#9E168D' },
+  { value:    128.5, color: '#9E168D' },
+  { value:    128.6, color: '#9E168D' },
+  { value:    128.7, color: '#9F168D' },
+  { value:    128.8, color: '#9F168C' },
+  { value:    128.9, color: '#A0168C' },
+  { value:      129, color: '#A0168C' },
+  { value:    129.1, color: '#A0168C' },
+  { value:    129.2, color: '#A1168B' },
+  { value:    129.3, color: '#A1168B' },
+  { value:    129.4, color: '#A2168A' },
+  { value:    129.5, color: '#A2168A' },
+  { value:    129.6, color: '#A2168A' },
+  { value:    129.7, color: '#A3168A' },
+  { value:    129.8, color: '#A31589' },
+  { value:    129.9, color: '#A41589' },
+  { value:      130, color: '#A41589' },
+  { value:    130.1, color: '#A41589' },
+  { value:    130.2, color: '#A51589' },
+  { value:    130.3, color: '#A51488' },
+  { value:    130.4, color: '#A61488' },
+  { value:    130.5, color: '#A61488' },
+  { value:    130.6, color: '#A61488' },
+  { value:    130.7, color: '#A71487' },
+  { value:    130.8, color: '#A71487' },
+  { value:    130.9, color: '#A81486' },
+  { value:      131, color: '#A81486' },
+  { value:    131.1, color: '#A81486' },
+  { value:    131.2, color: '#A91486' },
+  { value:    131.3, color: '#A91485' },
+  { value:    131.4, color: '#AA1485' },
+  { value:    131.5, color: '#AA1485' },
+  { value:    131.6, color: '#AA1485' },
+  { value:    131.7, color: '#AB1485' },
+  { value:    131.8, color: '#AB1384' },
+  { value:    131.9, color: '#AC1384' },
+  { value:      132, color: '#AC1384' },
+  { value:    132.1, color: '#AC1384' },
+  { value:    132.2, color: '#AD1384' },
+  { value:    132.3, color: '#AD1283' },
+  { value:    132.4, color: '#AE1283' },
+  { value:    132.5, color: '#AE1283' },
+  { value:    132.6, color: '#AE1283' },
+  { value:    132.7, color: '#AF1283' },
+  { value:    132.8, color: '#AF1282' },
+  { value:    132.9, color: '#B01282' },
+  { value:      133, color: '#B01282' },
+  { value:    133.1, color: '#B01282' },
+  { value:    133.2, color: '#B11281' },
+  { value:    133.3, color: '#B11281' },
+  { value:    133.4, color: '#B21280' },
+  { value:    133.5, color: '#B21280' },
+  { value:    133.6, color: '#B21280' },
+  { value:    133.7, color: '#B31280' },
+  { value:    133.8, color: '#B3117F' },
+  { value:    133.9, color: '#B4117F' },
+  { value:      134, color: '#B4117F' },
+  { value:    134.1, color: '#B4117F' },
+  { value:    134.2, color: '#B5117F' },
+  { value:    134.3, color: '#B5107E' },
+  { value:    134.4, color: '#B6107E' },
+  { value:    134.5, color: '#B6107E' },
+  { value:    134.6, color: '#B6107E' },
+  { value:    134.7, color: '#B7107D' },
+  { value:    134.8, color: '#B7107D' },
+  { value:    134.9, color: '#B8107C' },
+  { value:      135, color: '#B8107C' },
+  { value:    135.1, color: '#B8107C' },
+  { value:    135.2, color: '#B9107C' },
+  { value:    135.3, color: '#B90F7B' },
+  { value:    135.4, color: '#BA0F7B' },
+  { value:    135.5, color: '#BA0F7B' },
+  { value:    135.6, color: '#BA0F7B' },
+  { value:    135.7, color: '#BB0F7B' },
+  { value:    135.8, color: '#BB0E7A' },
+  { value:    135.9, color: '#BC0E7A' },
+  { value:      136, color: '#BC0E7A' },
+  { value:    136.1, color: '#BC0E7A' },
+  { value:    136.2, color: '#BD0E7A' },
+  { value:    136.3, color: '#BD0E79' },
+  { value:    136.4, color: '#BE0E79' },
+  { value:    136.5, color: '#BE0E79' },
+  { value:    136.6, color: '#BE0E79' },
+  { value:    136.7, color: '#BF0E79' },
+  { value:    136.8, color: '#BF0D78' },
+  { value:    136.9, color: '#C00D78' },
+  { value:      137, color: '#C00D78' },
+  { value:    137.1, color: '#C00D78' },
+  { value:    137.2, color: '#C10D77' },
+  { value:    137.3, color: '#C10C77' },
+  { value:    137.4, color: '#C20C76' },
+  { value:    137.5, color: '#C20C76' },
+  { value:    137.6, color: '#C20C76' },
+  { value:    137.7, color: '#C30C76' },
+  { value:    137.8, color: '#C30C75' },
+  { value:    137.9, color: '#C40C75' },
+  { value:      138, color: '#C40C75' },
+  { value:    138.1, color: '#C40C75' },
+  { value:    138.2, color: '#C50C75' },
+  { value:    138.3, color: '#C50C74' },
+  { value:    138.4, color: '#C60C74' },
+  { value:    138.5, color: '#C60C74' },
+  { value:    138.6, color: '#C60C74' },
+  { value:    138.7, color: '#C70C73' },
+  { value:    138.8, color: '#C70B73' },
+  { value:    138.9, color: '#C80B72' },
+  { value:      139, color: '#C80B72' },
+  { value:    139.1, color: '#C80B72' },
+  { value:    139.2, color: '#C90B72' },
+  { value:    139.3, color: '#C90A71' },
+  { value:    139.4, color: '#CA0A71' },
+  { value:    139.5, color: '#CA0A71' },
+  { value:    139.6, color: '#CA0A71' },
+  { value:    139.7, color: '#CB0A71' },
+  { value:    139.8, color: '#CB0A70' },
+  { value:    139.9, color: '#CC0A70' },
+  { value:      140, color: '#CC0A70' },
+  { value:    140.1, color: '#CC0A70' },
+  { value:    140.2, color: '#CD0A70' },
+  { value:    140.3, color: '#CD0A6F' },
+  { value:    140.4, color: '#CE0A6F' },
+  { value:    140.5, color: '#CE0A6F' },
+  { value:    140.6, color: '#CE0A6F' },
+  { value:    140.7, color: '#CF0A6F' },
+  { value:    140.8, color: '#CF096E' },
+  { value:    140.9, color: '#D0096E' },
+  { value:      141, color: '#D0096E' },
+  { value:    141.1, color: '#D0096E' },
+  { value:    141.2, color: '#D1096D' },
+  { value:    141.3, color: '#D1086D' },
+  { value:    141.4, color: '#D2086C' },
+  { value:    141.5, color: '#D2086C' },
+  { value:    141.6, color: '#D2086C' },
+  { value:    141.7, color: '#D3086C' },
+  { value:    141.8, color: '#D3086B' },
+  { value:    141.9, color: '#D4086B' },
+  { value:      142, color: '#D4086B' },
+  { value:    142.1, color: '#D4086B' },
+  { value:    142.2, color: '#D5086B' },
+  { value:    142.3, color: '#D5086A' },
+  { value:    142.4, color: '#D6086A' },
+  { value:    142.5, color: '#D6086A' },
+  { value:    142.6, color: '#D6086A' },
+  { value:    142.7, color: '#D70869' },
+  { value:    142.8, color: '#D70769' },
+  { value:    142.9, color: '#D80768' },
+  { value:      143, color: '#D80768' },
+  { value:    143.1, color: '#D80768' },
+  { value:    143.2, color: '#D90768' },
+  { value:    143.3, color: '#D90667' },
+  { value:    143.4, color: '#DA0667' },
+  { value:    143.5, color: '#DA0667' },
+  { value:    143.6, color: '#DA0667' },
+  { value:    143.7, color: '#DB0667' },
+  { value:    143.8, color: '#DB0666' },
+  { value:    143.9, color: '#DC0666' },
+  { value:      144, color: '#DC0666' },
+  { value:    144.1, color: '#DC0666' },
+  { value:    144.2, color: '#DD0666' },
+  { value:    144.3, color: '#DD0665' },
+  { value:    144.4, color: '#DE0665' },
+  { value:    144.5, color: '#DE0665' },
+  { value:    144.6, color: '#DE0665' },
+  { value:    144.7, color: '#DF0665' },
+  { value:    144.8, color: '#DF0564' },
+  { value:    144.9, color: '#E00564' },
+  { value:      145, color: '#E00564' },
+  { value:    145.1, color: '#E00564' },
+  { value:    145.2, color: '#E10563' },
+  { value:    145.3, color: '#E10463' },
+  { value:    145.4, color: '#E20462' },
+  { value:    145.5, color: '#E20462' },
+  { value:    145.6, color: '#E30462' },
+  { value:    145.7, color: '#E30462' },
+  { value:    145.8, color: '#E40461' },
+  { value:    145.9, color: '#E40461' },
+  { value:      146, color: '#E50461' },
+  { value:    146.1, color: '#E50461' },
+  { value:    146.2, color: '#E60461' },
+  { value:    146.3, color: '#E60460' },
+  { value:    146.4, color: '#E70460' },
+  { value:    146.5, color: '#E70460' },
+  { value:    146.6, color: '#E70460' },
+  { value:    146.7, color: '#E8045F' },
+  { value:    146.8, color: '#E8035F' },
+  { value:    146.9, color: '#E9035E' },
+  { value:      147, color: '#E9035E' },
+  { value:    147.1, color: '#E9035E' },
+  { value:    147.2, color: '#EA035E' },
+  { value:    147.3, color: '#EA025D' },
+  { value:    147.4, color: '#EB025D' },
+  { value:    147.5, color: '#EB025D' },
+  { value:    147.6, color: '#EB025D' },
+  { value:    147.7, color: '#EC025D' },
+  { value:    147.8, color: '#EC025C' },
+  { value:    147.9, color: '#ED025C' },
+  { value:      148, color: '#ED025C' },
+  { value:    148.1, color: '#ED025C' },
+  { value:    148.2, color: '#EE025C' },
+  { value:    148.3, color: '#EE025B' },
+  { value:    148.4, color: '#EF025B' },
+  { value:    148.5, color: '#EF025B' },
+  { value:    148.6, color: '#EF025B' },
+  { value:    148.7, color: '#F0025B' },
+  { value:    148.8, color: '#F0015A' },
+  { value:    148.9, color: '#F1015A' },
+  { value:      149, color: '#F1015A' },
+  { value:    149.1, color: '#F1015A' },
+  { value:    149.2, color: '#F20159' },
+  { value:    149.3, color: '#F20059' },
+  { value:    149.4, color: '#F30058' },
+  { value:    149.5, color: '#F30058' },
+  { value:    149.6, color: '#F30058' },
+  { value:    149.7, color: '#F40058' },
+  { value:    149.8, color: '#F40057' },
+  { value:    149.9, color: '#F50057' },
+  { value:      150, color: '#F50057' },
   ],
-  // ETc observed (mm/day) — matches etc_style SLD (purple→pink→cyan→blue)
+  // ── ETc: 0.0 → 15.0 mm/day, step 0.1 (151 stops) ──────────────────────────
   etc: [
-    { value:   0, color: '#4A148C' }, { value:   1, color: '#6A1B9A' },
-    { value:   2, color: '#8E24AA' }, { value:   3, color: '#AB47BC' },
-    { value:   4, color: '#BA68C8' }, { value: 4.5, color: '#CE93D8' },
-    { value:   5, color: '#E1BEE7' }, { value: 5.5, color: '#B2EBF2' },
-    { value:   6, color: '#80DEEA' }, { value: 6.5, color: '#4DD0E1' },
-    { value:   7, color: '#26C6DA' }, { value: 7.5, color: '#00BCD4' },
-    { value:   8, color: '#039BE5' }, { value: 8.5, color: '#0277BD' },
-    { value:   9, color: '#01579B' }, { value: 9.5, color: '#0D47A1' },
-    { value:  10, color: '#001F54' },
-  ],
-  // ── Cumulative forecast colormaps (mm_total over window) ────────────────
-  // CWR/IWR forecast rasters store cumulative totals, not daily rates.
-  // Range: 0–150 mm (covers up to 15-day × 10 mm/day).
-  cwr_total: [
-    { value:   0, color: '#5D4037' }, { value:  10, color: '#795548' },
-    { value:  20, color: '#A1887F' }, { value:  30, color: '#D4AC0D' },
-    { value:  40, color: '#F1C40F' }, { value:  50, color: '#9CCC65' },
-    { value:  60, color: '#66BB6A' }, { value:  70, color: '#42A5F5' },
-    { value:  80, color: '#1E88E5' }, { value:  90, color: '#1565C0' },
-    { value: 100, color: '#0D47A1' }, { value: 120, color: '#4A148C' },
-    { value: 150, color: '#2E0854' },
-  ],
-  iwr_total: [
-    { value:   0, color: '#E0F7FA' }, { value:  10, color: '#B2EBF2' },
-    { value:  20, color: '#80DEEA' }, { value:  30, color: '#4DD0E1' },
-    { value:  40, color: '#26C6DA' }, { value:  50, color: '#00BCD4' },
-    { value:  60, color: '#0097A7' }, { value:  70, color: '#00796B' },
-    { value:  80, color: '#00695C' }, { value: 100, color: '#004D40' },
-    { value: 120, color: '#1A237E' }, { value: 150, color: '#0D0A3A' },
+  // ETc  0.0→15.0 step 0.1  (151 stops)
+  { value:        0, color: '#EDE7F6' },
+  { value:      0.1, color: '#E9E2F4' },
+  { value:      0.2, color: '#E5DDF2' },
+  { value:      0.3, color: '#E2D9F1' },
+  { value:      0.4, color: '#DED4EF' },
+  { value:      0.5, color: '#DACFED' },
+  { value:      0.6, color: '#D6CAEB' },
+  { value:      0.7, color: '#D3C5EA' },
+  { value:      0.8, color: '#CFC1E8' },
+  { value:      0.9, color: '#CCBCE7' },
+  { value:        1, color: '#C8B7E5' },
+  { value:      1.1, color: '#C4B2E3' },
+  { value:      1.2, color: '#C1ADE1' },
+  { value:      1.3, color: '#BDA9E0' },
+  { value:      1.4, color: '#BAA4DE' },
+  { value:      1.5, color: '#B69FDC' },
+  { value:      1.6, color: '#B29ADA' },
+  { value:      1.7, color: '#AE95D8' },
+  { value:      1.8, color: '#AB91D7' },
+  { value:      1.9, color: '#A78CD5' },
+  { value:        2, color: '#A387D3' },
+  { value:      2.1, color: '#9F82D1' },
+  { value:      2.2, color: '#9B7DD0' },
+  { value:      2.3, color: '#9879CE' },
+  { value:      2.4, color: '#9474CD' },
+  { value:      2.5, color: '#906FCB' },
+  { value:      2.6, color: '#8C6AC9' },
+  { value:      2.7, color: '#8965C7' },
+  { value:      2.8, color: '#8561C6' },
+  { value:      2.9, color: '#825CC4' },
+  { value:        3, color: '#7E57C2' },
+  { value:      3.1, color: '#7A57C2' },
+  { value:      3.2, color: '#7758C2' },
+  { value:      3.3, color: '#7358C2' },
+  { value:      3.4, color: '#7059C2' },
+  { value:      3.5, color: '#6C59C2' },
+  { value:      3.6, color: '#695AC2' },
+  { value:      3.7, color: '#655AC2' },
+  { value:      3.8, color: '#625BC1' },
+  { value:      3.9, color: '#5E5BC1' },
+  { value:        4, color: '#5B5CC1' },
+  { value:      4.1, color: '#585CC1' },
+  { value:      4.2, color: '#545DC1' },
+  { value:      4.3, color: '#515DC1' },
+  { value:      4.4, color: '#4D5EC1' },
+  { value:      4.5, color: '#4A5EC1' },
+  { value:      4.6, color: '#465EC1' },
+  { value:      4.7, color: '#435FC1' },
+  { value:      4.8, color: '#3F5FC1' },
+  { value:      4.9, color: '#3C60C1' },
+  { value:        5, color: '#3860C1' },
+  { value:      5.1, color: '#3461C1' },
+  { value:      5.2, color: '#3161C1' },
+  { value:      5.3, color: '#2D62C0' },
+  { value:      5.4, color: '#2A62C0' },
+  { value:      5.5, color: '#2663C0' },
+  { value:      5.6, color: '#2363C0' },
+  { value:      5.7, color: '#1F64C0' },
+  { value:      5.8, color: '#1C64C0' },
+  { value:      5.9, color: '#1865C0' },
+  { value:        6, color: '#1565C0' },
+  { value:      6.1, color: '#1466BE' },
+  { value:      6.2, color: '#1467BD' },
+  { value:      6.3, color: '#1368BB' },
+  { value:      6.4, color: '#1369BA' },
+  { value:      6.5, color: '#126AB8' },
+  { value:      6.6, color: '#116BB6' },
+  { value:      6.7, color: '#106CB5' },
+  { value:      6.8, color: '#106DB3' },
+  { value:      6.9, color: '#0F6EB2' },
+  { value:        7, color: '#0E6FB0' },
+  { value:      7.1, color: '#0D70AE' },
+  { value:      7.2, color: '#0C71AD' },
+  { value:      7.3, color: '#0C72AB' },
+  { value:      7.4, color: '#0B73AA' },
+  { value:      7.5, color: '#0A74A8' },
+  { value:      7.6, color: '#0975A6' },
+  { value:      7.7, color: '#0976A4' },
+  { value:      7.8, color: '#0877A3' },
+  { value:      7.9, color: '#0878A1' },
+  { value:        8, color: '#07799F' },
+  { value:      8.1, color: '#067A9D' },
+  { value:      8.2, color: '#067B9C' },
+  { value:      8.3, color: '#057C9A' },
+  { value:      8.4, color: '#057D99' },
+  { value:      8.5, color: '#047E97' },
+  { value:      8.6, color: '#037F95' },
+  { value:      8.7, color: '#028094' },
+  { value:      8.8, color: '#028192' },
+  { value:      8.9, color: '#018291' },
+  { value:        9, color: '#00838F' },
+  { value:      9.1, color: '#008693' },
+  { value:      9.2, color: '#008997' },
+  { value:      9.3, color: '#008D9A' },
+  { value:      9.4, color: '#00909E' },
+  { value:      9.5, color: '#0093A2' },
+  { value:      9.6, color: '#0096A6' },
+  { value:      9.7, color: '#009AA9' },
+  { value:      9.8, color: '#009DAD' },
+  { value:      9.9, color: '#00A1B0' },
+  { value:       10, color: '#00A4B4' },
+  { value:     10.1, color: '#00A7B8' },
+  { value:     10.2, color: '#00AABC' },
+  { value:     10.3, color: '#00AEBF' },
+  { value:     10.4, color: '#00B1C3' },
+  { value:     10.5, color: '#00B4C7' },
+  { value:     10.6, color: '#00B7CB' },
+  { value:     10.7, color: '#00BACF' },
+  { value:     10.8, color: '#00BED2' },
+  { value:     10.9, color: '#00C1D6' },
+  { value:       11, color: '#00C4DA' },
+  { value:     11.1, color: '#00C7DE' },
+  { value:     11.2, color: '#00CBE1' },
+  { value:     11.3, color: '#00CEE5' },
+  { value:     11.4, color: '#00D2E8' },
+  { value:     11.5, color: '#00D5EC' },
+  { value:     11.6, color: '#00D8F0' },
+  { value:     11.7, color: '#00DBF4' },
+  { value:     11.8, color: '#00DFF7' },
+  { value:     11.9, color: '#00E2FB' },
+  { value:       12, color: '#00E5FF' },
+  { value:     12.1, color: '#04E5FC' },
+  { value:     12.2, color: '#07E6FA' },
+  { value:     12.3, color: '#0BE6F7' },
+  { value:     12.4, color: '#0EE7F5' },
+  { value:     12.5, color: '#12E7F2' },
+  { value:     12.6, color: '#15E7EF' },
+  { value:     12.7, color: '#19E8EC' },
+  { value:     12.8, color: '#1CE8EA' },
+  { value:     12.9, color: '#20E9E7' },
+  { value:       13, color: '#23E9E4' },
+  { value:     13.1, color: '#26E9E1' },
+  { value:     13.2, color: '#2AE9DE' },
+  { value:     13.3, color: '#2DEADC' },
+  { value:     13.4, color: '#31EAD9' },
+  { value:     13.5, color: '#34EAD6' },
+  { value:     13.6, color: '#38EAD3' },
+  { value:     13.7, color: '#3BEBD1' },
+  { value:     13.8, color: '#3FEBCE' },
+  { value:     13.9, color: '#42ECCC' },
+  { value:       14, color: '#46ECC9' },
+  { value:     14.1, color: '#4AECC6' },
+  { value:     14.2, color: '#4DEDC4' },
+  { value:     14.3, color: '#51EDC1' },
+  { value:     14.4, color: '#54EEBF' },
+  { value:     14.5, color: '#58EEBC' },
+  { value:     14.6, color: '#5BEEB9' },
+  { value:     14.7, color: '#5FEFB6' },
+  { value:     14.8, color: '#62EFB4' },
+  { value:     14.9, color: '#66F0B1' },
+  { value:       15, color: '#69F0AE' },
   ],
 }
 // Current style object
@@ -648,22 +4176,13 @@ const activeLayers = computed(() => {
 // Get color for a specific value; pass isCumulative=true for CWR/IWR forecast totals
 function getColorForValue(layerName, value, isCumulative = false) {
   if (value === undefined || value === null) return '#808080'
-
-  const mapKey = isCumulative && (layerName === 'cwr' || layerName === 'iwr')
-    ? `${layerName}_total`
-    : layerName
-  const colorMap = colorMaps[mapKey]
+  const colorMap = colorMaps[layerName]
   if (!colorMap) return '#808080'
-
   let closest = colorMap[0]
   let minDiff = Math.abs(value - closest.value)
-
   for (let i = 1; i < colorMap.length; i++) {
     const diff = Math.abs(value - colorMap[i].value)
-    if (diff < minDiff) {
-      minDiff = diff
-      closest = colorMap[i]
-    }
+    if (diff < minDiff) { minDiff = diff; closest = colorMap[i] }
   }
   return closest.color
 }
@@ -750,7 +4269,7 @@ function changeMapStyle(styleName) {
 // Load boundary
 async function loadBoundary() {
   try {
-    const res = await fetch('http://localhost:8000/api/boundary')
+    const res = await fetch(`${API_BASE}/api/boundary`)
     const data = await res.json()
 
     if (boundaryLayer) {
@@ -777,7 +4296,7 @@ async function loadBoundary() {
 
 // Unit label per layer (observed / daily values)
 function layerUnit(name) {
-  return { savi: '', kc: '', cwr: 'mm/day', iwr: 'mm/day', etc: 'mm/day' }[name] ?? ''
+  return { savi: '', kc: '', cwr: 'mm', iwr: 'mm', etc: 'mm/day' }[name] ?? ''
 }
 
 // Check if point is within boundary
@@ -874,9 +4393,10 @@ async function getCurrentLocation() {
 }
 
 // Handle map click
-// Handle map click — REPLACE the existing onMapClick function with this one
 async function onMapClick(e) {
+  const clickId = ++mapClickRequestId
   const { lat, lng } = e.latlng
+  fetchPixelTimeSeries(lat, lng)
  
   // ── Open popup immediately with loading state ──────────────────────────
   const popup = L.popup({
@@ -890,11 +4410,12 @@ async function onMapClick(e) {
     .openOn(map)
  
   // ── Fetch point data (existing /api/point call) ────────────────────────
-  await fetchPointData(lat, lng)
+  const hasFreshPointData = await fetchPointData(lat, lng)
+  if (clickId !== mapClickRequestId) return
   emit('location-selected', { lat, lon: lng })
  
   // ── Build popup content ───────────────────────────────────────────────
-  if (pointData.value) {
+  if (hasFreshPointData && pointData.value) {
     const activeWithData = activeLayers.value.filter(
       l => pointData.value.values?.[l.name] != null
     )
@@ -913,41 +4434,8 @@ async function onMapClick(e) {
           </div>`
       })
  
-      // ── "View Trend" button ─────────────────────────────────────────
-      content += `
-        <div class="popup-trend-row">
-          <button class="popup-trend-btn" id="pixel-trend-btn">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2.5">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-            </svg>
-            View Trend
-          </button>
-        </div>`
- 
       content += `</div>`
       popup.setContent(content)
- 
-      // ── Wire button click after popup renders ──────────────────────
-      popup.on('add', () => {
-        // Small delay to ensure DOM is ready
-        setTimeout(() => {
-          const btn = map.getContainer().querySelector('#pixel-trend-btn')
-          if (btn) {
-            btn.addEventListener('click', () => {
-              showPixelModal.value = true
-              // Kick off the timeseries fetch if not already loaded
-              if (
-                !pixelTimeSeries.value ||
-                Math.abs(pixelTimeSeries.value.latitude - lat) > 0.0001 ||
-                Math.abs(pixelTimeSeries.value.longitude - lng) > 0.0001
-              ) {
-                fetchPixelTimeSeries(lat, lng)
-              }
-            })
-          }
-        }, 80)
-      })
  
     } else {
       popup.setContent(
@@ -1006,15 +4494,24 @@ onMounted(() => {
   loadBoundary()
   map.on('click', onMapClick)
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', handlePixelWidgetViewportResize)
 })
 
 // Clean up
 onUnmounted(() => {
+  stopPixelWidgetPointer()
+  abortPixelTimeSeriesRequest()
+  if (pointDataController) {
+    pointDataController.abort()
+    pointDataController = null
+  }
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', handlePixelWidgetViewportResize)
   if (userLocationMarker && map) {
     map.removeLayer(userLocationMarker)
   }
   if (map) {
+    map.off('click', onMapClick)
     map.remove()
   }
 })
@@ -1833,154 +5330,328 @@ defineExpose({
   font-size: 0.85rem;
 } 
 
-.popup-trend-row {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 8px;
-  margin-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-}
- 
-:global(.custom-value-popup.light .popup-trend-row) {
-  border-top-color: rgba(0, 0, 0, 0.06);
-}
- 
-:global(.popup-trend-btn) {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
-  border: 1px solid rgba(59, 159, 217, 0.45);
-  border-radius: 20px;
-  background: rgba(59, 159, 217, 0.12);
-  color: #3b9fd9;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: 'Inter', 'Segoe UI', sans-serif;
-  transition: background 0.18s, border-color 0.18s;
-}
-:global(.popup-trend-btn:hover) {
-  background: rgba(59, 159, 217, 0.22);
-  border-color: #3b9fd9;
-}
- 
-/* ─── Pixel Modal ──────────────────────────────────────────────── */
-.pixel-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-}
- 
-.pixel-modal {
-  background: #fff;
-  border-radius: 20px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
-  width: min(780px, 96vw);
-  height: min(540px, 90vh);
+/* ─── Floating Pixel Trend Widget ──────────────────────────────── */
+.pixel-trend-widget {
+  position: absolute;
+  z-index: 2600;
+  min-width: min(420px, calc(100% - 24px));
+  min-height: 58px;
   display: flex;
   flex-direction: column;
+  border-radius: 20px;
+  border: 1px solid rgba(180, 205, 222, 0.18);
+  background:
+    linear-gradient(135deg, rgba(26, 42, 55, 0.72), rgba(7, 15, 21, 0.78) 42%, rgba(10, 25, 20, 0.68)),
+    rgba(9, 18, 26, 0.58);
+  backdrop-filter: blur(26px) saturate(155%);
+  -webkit-backdrop-filter: blur(26px) saturate(155%);
+  box-shadow:
+    0 30px 80px rgba(1, 10, 17, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: #eaf6fc;
   overflow: hidden;
+  transform-origin: top right;
+  transition:
+    left 0.24s ease,
+    top 0.24s ease,
+    width 0.24s ease,
+    height 0.24s ease,
+    border-radius 0.24s ease,
+    box-shadow 0.24s ease,
+    opacity 0.22s ease,
+    transform 0.22s ease;
+  touch-action: none;
 }
- 
-.pixel-modal-header {
+
+.pixel-trend-widget::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 16% 0%, rgba(59, 159, 217, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), transparent 38%);
+  opacity: 0.9;
+}
+
+.pixel-trend-widget.dragging,
+.pixel-trend-widget.resizing {
+  transition: none;
+  user-select: none;
+}
+
+.pixel-trend-widget.maximized {
+  border-radius: 18px;
+}
+
+.pixel-trend-widget.minimized {
+  box-shadow:
+    0 18px 50px rgba(1, 10, 17, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.pixel-widget-header {
+  position: relative;
+  z-index: 2;
+  min-height: 58px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px 12px;
-  border-bottom: 1px solid rgba(60, 60, 60, 0.08);
+  gap: 14px;
+  padding: 12px 14px 12px 18px;
+  border-bottom: 1px solid rgba(180, 205, 222, 0.12);
+  background: rgba(7, 15, 22, 0.28);
+  flex-shrink: 0;
+  cursor: grab;
+  touch-action: none;
+}
+.pixel-trend-widget.dragging .pixel-widget-header {
+  cursor: grabbing;
+}
+.pixel-trend-widget.minimized .pixel-widget-header {
+  border-bottom-color: transparent;
+}
+
+.pixel-widget-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.pixel-widget-title svg { color: #3b9fd9; flex-shrink: 0; }
+
+.pixel-widget-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
 }
- 
-.modal-title-row {
-  display: flex;
+.pixel-widget-action {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-.modal-icon { color: #3b9fd9; }
-.modal-title {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: #1b485f;
-  font-family: 'Inter', 'Segoe UI', sans-serif;
-}
- 
-.modal-close-btn {
-  border: none;
-  background: rgba(100, 116, 139, 0.1);
-  border-radius: 8px;
-  padding: 5px;
+  justify-content: center;
+  border: 1px solid rgba(180, 205, 222, 0.12);
+  border-radius: 9px;
+  color: #d7edf8;
+  background: rgba(255, 255, 255, 0.05);
   cursor: pointer;
-  color: #64748b;
-  display: flex;
-  align-items: center;
-  transition: background 0.18s, color 0.18s;
+  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
+  touch-action: manipulation;
 }
-.modal-close-btn:hover {
-  background: rgba(248, 113, 113, 0.15);
-  color: #ef4444;
+.pixel-widget-action:hover {
+  transform: translateY(-1px);
+  background: rgba(59, 159, 217, 0.18);
+  color: #ffffff;
 }
- 
-/* Loading inside modal */
-.pixel-modal-loading {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: #8899aa;
-  font-size: 0.9rem;
+.pixel-widget-action.close:hover {
+  background: rgba(248, 113, 113, 0.18);
+  color: #fecaca;
 }
-.pts-spinner {
-  width: 36px; height: 36px;
-  border: 3px solid rgba(200, 210, 220, 0.2);
-  border-top-color: #2f855a;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
- 
-/* Error inside modal */
-.pixel-modal-error {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: #f87171;
-  font-size: 0.9rem;
-  padding: 2rem;
-}
- 
-/* Chart fills remaining space */
-.pixel-modal-chart {
+
+.pixel-widget-body {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
-  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
- 
-/* ─── Modal transition ─────────────────────────────────────────── */
-.modal-fade-enter-active,
-.modal-fade-leave-active {
+
+.pixel-widget-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 0.42fr);
+  gap: 10px;
+}
+.pixel-meta-card {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(180, 205, 222, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.055);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pixel-meta-card .meta-label {
+  color: #73b7ff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pixel-meta-card strong {
+  color: #eef8fc;
+  font-size: 0.84rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pixel-meta-card.source .meta-label { color: #67e08f; }
+
+.pixel-widget-loading,
+.pixel-widget-error,
+.pixel-widget-empty {
+  flex: 1;
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 1px solid rgba(180, 205, 222, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 24px;
+}
+.pixel-widget-loading {
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 12px;
+  text-align: left;
+}
+.pixel-loading-copy,
+.pixel-widget-error {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pixel-widget-loading strong,
+.pixel-widget-error strong {
+  color: #f3fbff;
+  font-size: 0.95rem;
+}
+.pixel-widget-loading span,
+.pixel-widget-error span,
+.pixel-widget-empty {
+  color: #9fb7c6;
+  font-size: 0.86rem;
+}
+.pixel-widget-error {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.25);
+  background: rgba(127, 29, 29, 0.16);
+}
+.pixel-loading-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
+  gap: 10px;
+}
+.pixel-loading-grid span,
+.pixel-loading-chart,
+.pixel-loading-chart span {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.065)
+}
+.pixel-loading-grid span {
+  height: 50px;
+}
+.pixel-loading-chart {
+  flex: 1;
+  min-height: 260px;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(16px, 1fr));
+  align-items: end;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid rgba(180, 205, 222, 0.1);
+}
+.pixel-loading-chart span {
+  min-height: 54px;
+  height: 52%;
+}
+.pixel-loading-chart span:nth-child(2n) { height: 72%; }
+.pixel-loading-chart span:nth-child(3n) { height: 38%; }
+.pixel-loading-grid span::after,
+.pixel-loading-chart::after,
+.pixel-loading-chart span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+  animation: shimmer 1.35s ease-in-out infinite;
+}
+
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+.pixel-widget-chart {
+  flex: 1;
+  min-height: 0;
+}
+
+.pixel-resize-handle {
+  position: absolute;
+  z-index: 4;
+  touch-action: none;
+}
+.pixel-resize-n,
+.pixel-resize-s {
+  left: 18px;
+  right: 18px;
+  height: 10px;
+  cursor: ns-resize;
+}
+.pixel-resize-n { top: -4px; }
+.pixel-resize-s { bottom: -4px; }
+.pixel-resize-e,
+.pixel-resize-w {
+  top: 18px;
+  bottom: 18px;
+  width: 10px;
+  cursor: ew-resize;
+}
+.pixel-resize-e { right: -4px; }
+.pixel-resize-w { left: -4px; }
+.pixel-resize-ne,
+.pixel-resize-nw,
+.pixel-resize-se,
+.pixel-resize-sw {
+  width: 18px;
+  height: 18px;
+}
+.pixel-resize-ne { top: -4px; right: -4px; cursor: nesw-resize; }
+.pixel-resize-nw { top: -4px; left: -4px; cursor: nwse-resize; }
+.pixel-resize-se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.pixel-resize-sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+
+.pixel-widget-fade-enter-active,
+.pixel-widget-fade-leave-active {
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
-.modal-fade-enter-from,
-.modal-fade-leave-to {
+.pixel-widget-fade-enter-from,
+.pixel-widget-fade-leave-to {
   opacity: 0;
-  transform: scale(0.96);
+  transform: translateX(18px) scale(0.97);
 }
- 
-@media (max-width: 600px) {
-  .pixel-modal {
-    width: 98vw;
-    height: 88vh;
+
+@media (max-width: 768px) {
+  .pixel-trend-widget {
+    border-radius: 16px;
+  }
+  .pixel-widget-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .pixel-trend-widget {
     border-radius: 14px;
+  }
+  .pixel-widget-header {
+    padding: 10px 10px 10px 14px;
+  }
+  .pixel-widget-body {
+    padding: 10px;
   }
 }
  

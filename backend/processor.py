@@ -1,69 +1,3 @@
-"""
-processor.py  — v5.2  (thesis-aligned)
-─────────────────────────────────────────────────────────────────────────────
-Pipeline: SAVI → Kc → ETc → CWR → IWR
-
-Thesis reference: Mandal, S. (2025). "Estimating Irrigation Water Requirement
-Using Multi-Sensor Satellite Data and Developing Dashboard." M.Tech thesis,
-IIRS/ISRO, Dehradun.
-
-═══════════════════════════════════════════════════════════════════════════════
-FORMULA REFERENCE (exact from thesis)
-═══════════════════════════════════════════════════════════════════════════════
-
-SAVI (Eq. 3, §4.3):
-    SAVI = (1 + L) × (ρ_NIR − ρ_Red) / (ρ_NIR + ρ_Red + L)
-    L = 0.5  [soil adjustment factor for arid/sparse-canopy conditions]
-
-Kc (Table 9, §5.3 — best equation: SAVI-FAO Moving-Averaged Kc, R²=0.882):
-    Kc = 1.2088 × SAVI + 0.5375
-    Clip to [Kc_ini=0.30, Kc_mid=1.15] per FAO-56 spring wheat
-
-ETc (Eq. 4, §4.4):
-    ETc = Kc × ET₀            [mm day⁻¹]
-    ET₀ = INSAT-3D/3DR/3DS daily PET product (FAO-56 Penman-Monteith,
-          4 km resolution, Nigam et al. 2023; Vyas et al. 2016)
-
-CWR (§4.4):
-    CWR = ETc                  [mm day⁻¹]
-    Seasonal CWR = Σ (ETc_i × Δt_i)  where Δt_i = days between consecutive
-    Sentinel-2 dates (~5 days cadence)
-
-IWR (§4.5):
-    IWR = max(CWR − Pe, 0)    [mm day⁻¹]
-
-Effective Rainfall Pe (FAO USDA-SCS formula, §4.5 / §5.5):
-    Pe = 0.6·P − 10           when P ≤ 75 mm per period  (≥ 0)
-    Pe = 0.8·P − 25           when P  > 75 mm per period
-    Applied on the 5-day interval TOTAL rainfall (mm per interval).
-    Rationale: FAO formula is calibrated for period totals; applying to daily
-    means (~1-3 mm) always gives Pe=0 (wrong).  The seasonal IWR ≈ CWR
-    because Rabi-season rainfall in USN is < 20 mm total (thesis §5.5).
-    Pe is divided by interval_days to return mm day⁻¹.
-
-═══════════════════════════════════════════════════════════════════════════════
-UNIT CONVENTION
-═══════════════════════════════════════════════════════════════════════════════
-All output rasters:   mm day⁻¹   (consistent with thesis §5.7 validation,
-                                   which reports RMSE = 1 mm/day vs BREB ETc)
-Sentinel cadence:     ~5 days   (overpass dates listed in thesis Table 4)
-INSAT PET/Rain:       4 km,  daily  (resampled bilinear → 10 m Sentinel grid)
-
-Seasonal totals derived externally by Σ(ETc_i × Δt_i) — see models.py.
-
-═══════════════════════════════════════════════════════════════════════════════
-INSAT PET SOURCE   (thesis §3.2.2, Table 3)
-═══════════════════════════════════════════════════════════════════════════════
-Product codes used:
-    INSAT-3D   : 3DIMG_L3C_PET_DLY  (PET)  /  3DIMG_L3G_IMR_DLY  (Rain)
-    INSAT-3DR  : 3RIMG_L3C_PET_DLY          /  3RIMG_L3G_IMR_DLY
-    INSAT-3DS  : 3SIMG_L3C_PET_DLY
-Native CRS:
-    PET  → EPSG:3857   (Web Mercator)
-    Rain → EPSG:4326   (Geographic WGS-84)
-Both reprojected bilinear to EPSG:32644 / 10 m (Sentinel-2 grid).
-"""
-
 import logging
 import numpy as np
 import rasterio
@@ -95,21 +29,11 @@ INSAT_NODATA = -999.0          # MOSDAC fill value for both PET and Rain
 
 # FAO-56 wheat Kc bounds (Allen et al. 1998, thesis Table 9 footnote)
 KC_MIN = 0.30   # Kc_ini (germination / initial stage)
-KC_MAX = 1.15   # Kc_mid (heading / flowering stage)
+KC_MAX = 1.5   # Kc_mid (heading / flowering stage)
 
 
 
 def compute_effective_rainfall(P_interval_mm: float, interval_days: int) -> float:
-    """
-    FAO effective rainfall from thesis §4.5.
-
-    Thesis formula is monthly:
-        Pe = 0.6P - 10 for P <= 75 mm/month
-        Pe = 0.8P - 25 for P > 75 mm/month
-
-    For Sentinel/forecast periods shorter than a month, scale the monthly
-    threshold and fixed losses by interval_days / 30, then return mm/day.
-    """
     interval_days = max(int(interval_days), 1)
     if P_interval_mm <= 0:
         return 0.0
@@ -156,13 +80,7 @@ class DataProcessor:
         shape: Tuple[int, int],
         sentinel_profile: Optional[Dict] = None,
     ) -> np.ndarray:
-        """
-        Load or reproject the wheat mask to the target grid.
-
-        The mask is produced by the Random Forest crop classifier on GEE
-        (Sentinel-2 + Sentinel-1, thesis §4.1/§5.1).  It is applied to
-        all computed layers so only wheat pixels are exported.
-        """
+        
         mask_dir  = self.dirs["processed"]["masks"]
         mask_path = mask_dir / "wheat_mask.tif"
 
@@ -219,18 +137,7 @@ class DataProcessor:
         filepath: Path,
         sentinel_profile: Dict,
     ) -> np.ndarray:
-        """
-        Load one INSAT-3DR/3D/3DS daily raster and reproject to the
-        Sentinel-2 grid (bilinear).
-
-        PET  files: EPSG:3857 (Web Mercator), ~4 km/pixel
-        Rain files: EPSG:4326 (WGS-84),       ~4 km/pixel
-
-        Both → EPSG:32644, 10 m (Sentinel UTM44N grid)
-        NoData fill = -999 replaced with NaN; then NaN replaced with 0.0
-        (zero contribution rather than gap propagation).
-        Negative values clamped to 0 (rain/PET cannot be negative).
-        """
+       
         dst_crs       = sentinel_profile["crs"]
         dst_transform = sentinel_profile["transform"]
         dst_h         = sentinel_profile["height"]
@@ -846,27 +753,6 @@ class DataProcessor:
         raster_means: List[float],
         acquisition_dates: List[datetime],
     ) -> float:
-        """
-        Compute seasonal total (mm/season) from per-scene daily raster means.
-
-        Seasonal CWR/IWR = Σ (daily_rate_i × Δt_i)
-        where Δt_i = days between consecutive Sentinel acquisition dates.
-
-        Thesis §5.4: "Seasonal crop water requirement requires time series
-        integration of the actual evapotranspiration of the available
-        satellite imageries."
-
-        Expected seasonal ranges (thesis §5.4/§5.5):
-          CWR: 395–680 mm/season (2022-23)  |  495–720 mm/season (2023-24)
-          IWR: 395–665 mm/season (2022-23)  |  405–685 mm/season (2023-24)
-
-        Args:
-            raster_means: list of mean daily CWR or IWR values (mm/day)
-            acquisition_dates: corresponding Sentinel-2 acquisition dates
-
-        Returns:
-            Seasonal total in mm/season
-        """
         if len(raster_means) != len(acquisition_dates) or len(raster_means) < 2:
             raise ValueError("Need at least 2 scenes with matching dates")
 

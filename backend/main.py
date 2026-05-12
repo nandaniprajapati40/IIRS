@@ -2,6 +2,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -13,12 +14,21 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from rasterio.enums import Resampling
-from rasterio.warp import transform as warp_transform
 import os
 from dotenv import load_dotenv
 from config import (
     STUDY_AREA, DIRECTORIES, GEOSERVER, SARIMAX_CONFIG,
     WHEAT_PARAMS
+)
+from extract_raster_pixels import (
+    RasterCoordinateError,
+    RasterGridUnavailable,
+    RasterLookupCancelled,
+    RasterOutOfBoundsError,
+    clear_raster_pixel_cache,
+    pixel_from_latlon as raster_pixel_from_latlon,
+    pixel_timeseries_for_pixel,
+    read_history_pixel_value as raster_read_history_pixel_value,
 )
 from logging_config import setup_logging
 import models
@@ -1111,6 +1121,7 @@ def run_pipeline() -> Dict:
 
     logger.info("── D: GeoServer ──")
     push_to_geoserver()
+    clear_raster_pixel_cache()
 
     dates   = _latest_n_complete_dates()
     n = len(dates)
@@ -1150,6 +1161,7 @@ def generate_operational_rasters() -> None:
         logger.info("[generate_operational_rasters] GeoServer push done")
     except Exception as e:
         logger.error(f"[generate_operational_rasters] GeoServer push failed: {e}", exc_info=True)
+    clear_raster_pixel_cache()
     logger.info("[generate_operational_rasters] DONE")
 
 
@@ -1208,133 +1220,119 @@ class ChatRequest(BaseModel):
     history: Optional[List[Dict]] = None
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PIXEL TIMESERIES  ── paste this block into main.py
+# PIXEL TIMESERIES FROM HISTORY RASTERS
 # ═══════════════════════════════════════════════════════════════════════════
-#
-# WHERE TO PASTE:
-#   Place the constant + loader below the existing PARAMS / _SRC / _VALID
-#   block (around line 95), and place the @app.get endpoint just before
-#   the existing /api/chat endpoint.
-#
-# ─────────────────────────────────────────────────────────────────────────
-# 1.  Constants & lazy loader  (add near the top-level constants, ~line 95)
-# ─────────────────────────────────────────────────────────────────────────
 
-PARQUET_DIR = Path("pixel_parquet")
-
-_PIXEL_MASTER: Optional[pd.DataFrame] = None
+_PIXEL_REQUEST_LOCK = Lock()
+_LATEST_PIXEL_REQUEST_IDS: Dict[str, int] = {}
 
 
-def _get_pixel_master() -> Optional[pd.DataFrame]:
-    """
-    Lazily load pixel_master.parquet once and cache it.
-    Returns None if the file doesn't exist yet
-    (extract_raster_pixels.py hasn't been run).
-    """
-    global _PIXEL_MASTER
-    if _PIXEL_MASTER is not None:
-        return _PIXEL_MASTER
+def _register_pixel_request(request_group: str, request_id: int) -> None:
+    if request_id <= 0:
+        return
+    request_group = request_group or "default"
+    with _PIXEL_REQUEST_LOCK:
+        current = _LATEST_PIXEL_REQUEST_IDS.get(request_group, 0)
+        _LATEST_PIXEL_REQUEST_IDS[request_group] = max(current, request_id)
 
-    master_path = PARQUET_DIR / "pixel_master.parquet"
-    if not master_path.exists():
-        logger.warning(
-            "pixel_master.parquet not found – "
-            "run extract_raster_pixels.py first"
-        )
+
+def _pixel_request_cancelled(request_group: str, request_id: int) -> bool:
+    if request_id <= 0:
+        return False
+    request_group = request_group or "default"
+    with _PIXEL_REQUEST_LOCK:
+        return request_id < _LATEST_PIXEL_REQUEST_IDS.get(request_group, 0)
+
+
+def _pixel_from_latlon(lat: float, lon: float) -> Dict:
+    try:
+        return raster_pixel_from_latlon(lat, lon, params=PARAMS)
+    except RasterGridUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RasterCoordinateError as exc:
+        logger.warning(f"[pixel-ts] invalid coordinate ({lat}, {lon}): {exc}")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RasterOutOfBoundsError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _read_history_pixel_value(path: Path, pixel: Dict) -> Optional[float]:
+    return raster_read_history_pixel_value(path, pixel, params=PARAMS)
+
+
+def _pixel_timeseries(pixel: Dict, request_group: str = "default", request_id: int = 0) -> Dict[str, List[Dict]]:
+    return pixel_timeseries_for_pixel(
+        pixel,
+        params=PARAMS,
+        allowed_seasons=get_allowed_season_ids(),
+        season_id_fn=get_season_id,
+        in_season_fn=is_in_season,
+        cancelled_fn=lambda: _pixel_request_cancelled(request_group, request_id),
+    )
+
+
+def _date_for_slot(slot: Optional[str]) -> Optional[datetime]:
+    dates = _latest_n_complete_dates(HISTORY_DATES)
+    if not dates:
         return None
+
+    if not slot or slot == "today":
+        return dates[0]
 
     try:
-        _PIXEL_MASTER = pd.read_parquet(master_path)
-        logger.info(
-            f"Pixel master loaded: {len(_PIXEL_MASTER):,} pixels"
-        )
-    except Exception as e:
-        logger.error(f"Failed to load pixel_master.parquet: {e}")
+        idx = int(slot)
+    except (TypeError, ValueError):
         return None
 
-    return _PIXEL_MASTER
+    if idx < 0 or idx >= len(dates):
+        return None
+    return dates[idx]
 
-
-# ─────────────────────────────────────────────────────────────────────────
-# 2.  Endpoint  (add just before the existing @app.post("/api/chat") route)
-# ─────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/pixel-timeseries")
 def get_pixel_timeseries(
     lat: float = Query(..., description="Latitude of the clicked point"),
     lon: float = Query(..., description="Longitude of the clicked point"),
+    request_group: str = Query("default", description="Client request group used to isolate stale-read cancellation"),
+    request_id: int = Query(0, description="Client request id used to supersede stale pixel reads"),
 ):
     """
-    Return the full historical time-series for the pixel nearest to (lat, lon).
+    Return the historical time-series for the clicked raster pixel.
 
     The response contains one list per raster type (savi/kc/cwr/iwr/etc).
     Each list is sorted by date and contains { date, value } objects.
 
-    This reads directly from the pixel_parquet/ files written by
-    extract_raster_pixels.py — much faster than re-sampling the TIFFs.
+    This samples the same history rasters used by /api/point and GeoServer,
+    so the chart value for any date matches the selected-point value.
     """
 
-    # ── 1. Find nearest pixel ────────────────────────────────────────────
-    master = _get_pixel_master()
-    if master is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Pixel master not available. "
-                "Run extract_raster_pixels.py to build the parquet cache."
-            ),
-        )
-
-    # Squared Euclidean distance (fast; no trig needed for small areas)
-    dist = (master["latitude"] - lat) ** 2 + (master["longitude"] - lon) ** 2
-    nearest = master.loc[dist.idxmin()]
-    pixel_id: str = str(nearest["pixel_id"])
-
+    _register_pixel_request(request_group, request_id)
+    pixel = _pixel_from_latlon(lat, lon)
+    pixel_id: str = pixel["pixel_id"]
     logger.debug(
         f"[pixel-ts] query=({lat:.5f},{lon:.5f}) "
         f"→ pixel={pixel_id} "
-        f"({nearest['latitude']:.5f},{nearest['longitude']:.5f})"
+        f"center=({pixel['latitude']:.5f},{pixel['longitude']:.5f}) "
+        f"native=({pixel['native_x']:.2f},{pixel['native_y']:.2f})"
     )
 
-    # ── 2. Read timeseries for each raster type ──────────────────────────
-    raster_types = ["savi", "kc", "cwr", "iwr", "etc"]
-    result: Dict[str, list] = {}
-
-    for rtype in raster_types:
-
-        # Each individual date was saved as  <rtype>_<YYYYMMDD>.parquet
-        parquet_files = sorted(PARQUET_DIR.glob(f"{rtype}_*.parquet"))
-
-        all_chunks: List[pd.DataFrame] = []
-
-        for pq in parquet_files:
-            try:
-                df = pd.read_parquet(
-                    pq,
-                    filters=[("pixel_id", "==", pixel_id)],
-                    columns=["date", "value"],
-                )
-                if not df.empty:
-                    all_chunks.append(df)
-            except Exception as e:
-                logger.warning(f"[pixel-ts] skip {pq.name}: {e}")
-
-        if all_chunks:
-            combined = (
-                pd.concat(all_chunks, ignore_index=True)
-                .drop_duplicates(subset=["date"])
-                .sort_values("date")
-            )
-            # Serialise to list-of-dicts: [{"date": "2021-11-02", "value": 0.45}, …]
-            result[rtype] = combined[["date", "value"]].to_dict(orient="records")
-        else:
-            result[rtype] = []
+    # ── 2. Read timeseries for each raster type directly from GeoTIFFs ───
+    try:
+        result = _pixel_timeseries(pixel, request_group=request_group, request_id=request_id)
+    except RasterLookupCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # ── 3. Return ─────────────────────────────────────────────────────────
     return {
-        "pixel_id":  pixel_id,
-        "latitude":  float(nearest["latitude"]),
-        "longitude": float(nearest["longitude"]),
+        "pixel_id": pixel_id,
+        "row": pixel["row"],
+        "col": pixel["col"],
+        "latitude": round(float(pixel["latitude"]), 7),
+        "longitude": round(float(pixel["longitude"]), 7),
+        "query_latitude": lat,
+        "query_longitude": lon,
+        "source": "history_rasters",
+        "seasons": get_allowed_season_ids(),
         "timeseries": result,
     }
 
@@ -1553,34 +1551,34 @@ def get_point(
     lon:  float,
     slot: Optional[str] = None,
 ):
-    if not slot:
-        slot = "today"
+    slot = slot or "today"
+    pixel = _pixel_from_latlon(lat, lon)
+    selected_date = _date_for_slot(slot)
+    if selected_date is None:
+        raise HTTPException(status_code=404, detail=f"No acquisition date found for slot '{slot}'")
 
-    result   = {}
+    result: Dict[str, Optional[float]] = {}
     forecast = {}
 
     for param in PARAMS:
-        path = history_path(param, slot)
-        if path.exists():
-            with rasterio.open(path) as src:
-                val = list(src.sample([(lon, lat)]))[0][0]
-                result[param] = None if val == NODATA else float(val)
+        result[param] = _read_history_pixel_value(history_path(param, slot), pixel)
 
     for param in FC_PARAMS:
         forecast[param] = {}
         for w in FORECAST_WINDOWS:
             fpath = forecast_path(param, slot, w)
-            if fpath.exists():
-                with rasterio.open(fpath) as src:
-                    val = list(src.sample([(lon, lat)]))[0][0]
-                    forecast[param][w] = None if val == NODATA else float(val)
-            else:
-                forecast[param][w] = None
+            forecast[param][w] = _read_history_pixel_value(fpath, pixel)
 
     return {
-        "lat":              lat,
-        "lon":              lon,
-        "acquisition_date": slot,
+        "lat":              round(float(pixel["latitude"]), 7),
+        "lon":              round(float(pixel["longitude"]), 7),
+        "query_lat":        lat,
+        "query_lon":        lon,
+        "pixel_id":         pixel["pixel_id"],
+        "row":              pixel["row"],
+        "col":              pixel["col"],
+        "acquisition_date": selected_date.strftime("%Y-%m-%d"),
+        "slot":             slot,
         "values":           result,
         "forecast":         forecast,
     }

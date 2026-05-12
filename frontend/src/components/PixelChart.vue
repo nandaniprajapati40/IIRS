@@ -1,5 +1,5 @@
 <template>
-  <div class="chart-container">
+  <div class="chart-container" :class="[{ compact }, theme === 'glass' ? 'glass' : 'light']">
 
     <!-- ── Header ── -->
     <div class="pixel-header">
@@ -18,27 +18,31 @@
 
     <!-- ── Controls ── -->
     <div class="chart-controls">
-      <div class="control-group">
-        <label>Indicator</label>
+      <div class="control-group layer-control">
+        <label for="pixel-layer-select">Indicator</label>
         <div class="select-wrapper">
-          <select v-model="selectedLayer" class="select">
-            <option value="savi">SAVI – Soil Adjusted Vegetation Index</option>
-            <option value="kc">Kc – Crop Coefficient</option>
-            <option value="cwr">CWR – Crop Water Requirement</option>
-            <option value="iwr">IWR – Irrigation Water Requirement</option>
-            <option value="etc">ETc – Crop Evapotranspiration</option>
+          <select id="pixel-layer-select" v-model="selectedLayer" class="select" aria-label="Select graph indicator">
+            <option
+              v-for="key in layerKeys"
+              :key="key"
+              :value="key"
+            >
+              {{ LAYER_CONFIG[key].full_name }}
+            </option>
           </select>
-          <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
+          <span class="select-arrow" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </span>
         </div>
       </div>
 
-      <div class="control-group">
+      <div class="control-group view-control">
         <label>View</label>
         <div class="toggle-switch">
           <button class="toggle-option" :class="{ active: mode === 'monthly' }" @click="mode = 'monthly'">
-            Monthly
+            Timeline
           </button>
           <button class="toggle-option" :class="{ active: mode === 'cumulative' }" @click="mode = 'cumulative'">
             Cumulative
@@ -46,22 +50,56 @@
         </div>
       </div>
 
-      <div class="chart-type-badge">
-        <svg v-if="mode === 'monthly'" width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2">
-          <path d="M3 3v18h18"/><path d="M3 15s3-6 6-6 6 6 9 3"/>
-        </svg>
+      <div class="chart-toolbar" aria-label="Chart zoom controls">
+        <button
+          class="chart-tool"
+          type="button"
+          @click="adjustChartZoom(-0.2)"
+          :disabled="chartZoom <= 1"
+          title="Zoom out"
+          aria-label="Zoom out"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+            <circle cx="11" cy="11" r="7"/><path d="M8 11h6"/><path d="m20 20-3.5-3.5"/>
+          </svg>
+        </button>
+        <span class="chart-zoom-value">{{ Math.round(chartZoom * 100) }}%</span>
+        <button
+          class="chart-tool"
+          type="button"
+          @click="adjustChartZoom(0.2)"
+          :disabled="chartZoom >= 3"
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+            <circle cx="11" cy="11" r="7"/><path d="M8 11h6"/><path d="M11 8v6"/><path d="m20 20-3.5-3.5"/>
+          </svg>
+        </button>
+        <button
+          class="chart-tool"
+          type="button"
+          @click="resetChartZoom"
+          :disabled="chartZoom === 1"
+          title="Reset zoom"
+          aria-label="Reset zoom"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/>
+          </svg>
+        </button>
       </div>
     </div>
 
+    
+
     <!-- ── Loading ── -->
     <div v-if="!pixelData" class="loading-overlay">
-      <div class="spinner"></div>
-      <span>Fetching pixel timeseries…</span>
+      <div class="chart-skeleton-line short"></div>
+      <div class="chart-skeleton-panel">
+        <span v-for="n in 8" :key="n"></span>
+      </div>
+      <div class="chart-skeleton-line"></div>
     </div>
 
     <!-- ── Error ── -->
@@ -83,9 +121,24 @@
     </div>
 
     <!-- ── Chart ── -->
-    <div v-else class="chart-wrapper">
-      <canvas ref="chartCanvas" class="chart"></canvas>
+    <div v-else class="chart-wrapper" :class="{ panning: isChartPanning }">
+      <div
+        ref="chartViewport"
+        class="chart-viewport"
+        @wheel="handleChartWheel"
+        @pointerdown="startChartPan"
+        @pointermove="moveChartPan"
+        @pointerup="stopChartPan"
+        @pointercancel="stopChartPan"
+        @pointerleave="stopChartPan"
+      >
+        <div class="chart-scroll-spacer" :style="{ width: `${chartCanvasWidth}px` }">
+          <canvas ref="chartCanvas" class="chart"></canvas>
+        </div>
+      </div>
     </div>
+
+    
 
     <!-- ── Record count hint ── -->
     <div class="record-hint" v-if="pixelData && recordCount > 0">
@@ -104,8 +157,9 @@ const canvasBackgroundPlugin = {
   id: 'canvasBackgroundPlugin',
   beforeDraw(chartInstance) {
     const { ctx, width, height } = chartInstance
+    const color = chartInstance.options?.plugins?.canvasBackgroundPlugin?.color || '#fff'
     ctx.save()
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = color
     ctx.fillRect(0, 0, width, height)
     ctx.restore()
   }
@@ -116,24 +170,40 @@ Chart.register(canvasBackgroundPlugin)
 const props = defineProps({
   pixelData: { type: Object, default: null },        // full /api/pixel-timeseries response
   initialLayer: { type: String, default: 'savi' },
+  modelLayer: { type: String, default: null },
+  modelMode: { type: String, default: null },
+  modelZoom: { type: Number, default: null },
+  theme: { type: String, default: 'light' },
+  compact: { type: Boolean, default: false },
 })
+const emit = defineEmits(['update:modelLayer', 'update:modelMode', 'update:modelZoom'])
+const theme = computed(() => props.theme)
+const compact = computed(() => props.compact)
 
 // ── State ─────────────────────────────────────────────────────────────────
 const chartCanvas = ref(null)
+const chartViewport = ref(null)
 let chart = null
+let chartViewportObserver = null
+let chartLayoutFrame = null
 
-const selectedLayer = ref(props.initialLayer || 'savi')
-const mode = ref('monthly')
+const selectedLayer = ref(props.modelLayer || props.initialLayer || 'savi')
+const mode = ref(props.modelMode || 'monthly')
 const error = ref(null)
+const chartZoom = ref(clamp(Number(props.modelZoom) || 1, 1, 3))
+const chartViewportWidth = ref(0)
+const isChartPanning = ref(false)
+let chartPanStart = null
 
 // ── Layer metadata (same units as DataChart / info panel) ─────────────────
 const LAYER_CONFIG = {
   savi: { full_name: 'SAVI',  unit: '' },
-  kc:   { full_name: 'Kc',    unit: '' },
+  kc:   { full_name: 'KC',    unit: '' },
   cwr:  { full_name: 'CWR',   unit: 'mm/day' },
   iwr:  { full_name: 'IWR',   unit: 'mm/day' },
-  etc:  { full_name: 'ETc',   unit: 'mm/day' },
+  etc:  { full_name: 'ETC',   unit: 'mm/day' },
 }
+const layerKeys = Object.keys(LAYER_CONFIG)
 
 // Season runs Nov–Apr; ordering for x-axis in cumulative view
 const SEASON_MONTH_ORDER = ['11', '12', '01', '02', '03', '04']
@@ -160,18 +230,20 @@ function getSeasonId(dateStr) {
   return null // off-season (May–Oct)
 }
 
-/** Group {date, value} records by 'YYYY-MM', return monthly averages sorted. */
-function buildMonthlyAvg(records) {
-  const grouped = {}
-  records.forEach(r => {
-    const key = r.date.substring(0, 7)
-    if (!grouped[key]) grouped[key] = []
-    grouped[key].push(r.value)
-  })
-  return Object.keys(grouped).sort().map(k => ({
-    monthKey: k,
-    value: grouped[k].reduce((a, b) => a + b, 0) / grouped[k].length,
-  }))
+/** Return actual raster observations sorted by acquisition date. */
+function buildObservationSeries(records) {
+  return [...records]
+    .filter(r => r.date && r.value !== null && r.value !== undefined)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(r => ({
+      date: r.date,
+      value: Number(r.value),
+    }))
+}
+
+function formatDateLabel(dateStr) {
+  const [y, mo, d] = dateStr.split('-')
+  return `${MONTH_NAMES_SHORT[mo]} ${Number(d)}, ${y}`
 }
 
 /** Build per-season monthly-average arrays (for cumulative multi-line chart). */
@@ -220,48 +292,208 @@ const seasonCount = computed(() => {
   return sids.size
 })
 
+const valueStats = computed(() => {
+  const values = buildObservationSeries(currentRecords.value)
+    .map(r => r.value)
+    .filter(v => Number.isFinite(v))
+
+  if (values.length === 0) return null
+  const latest = values[values.length - 1]
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length
+  const format = v => Number(v).toFixed(4)
+
+  return {
+    latest: format(latest),
+    min: format(min),
+    max: format(max),
+    mean: format(mean),
+  }
+})
+
+const observationCount = computed(() => buildObservationSeries(currentRecords.value).length)
+
+const chartCanvasWidth = computed(() => {
+  const viewport = Math.max(320, chartViewportWidth.value || 0)
+  const points = Math.max(1, mode.value === 'monthly' ? observationCount.value : SEASON_MONTH_ORDER.length)
+  const pointWidth = mode.value === 'monthly' ? 42 : 120
+  const naturalWidth = mode.value === 'monthly' ? points * pointWidth : viewport
+  return Math.max(viewport, Math.round(naturalWidth * chartZoom.value))
+})
+
 // ── Chart rendering ───────────────────────────────────────────────────────
+function destroyChart() {
+  if (chart) {
+    chart.destroy()
+    chart = null
+  }
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
+function measureChartViewport() {
+  if (!chartViewport.value) return
+  chartViewportWidth.value = Math.floor(chartViewport.value.clientWidth)
+}
+
+function attachChartViewportObserver() {
+  if (!chartViewport.value) return
+  if (chartViewportObserver) chartViewportObserver.disconnect()
+
+  measureChartViewport()
+  if (typeof ResizeObserver === 'undefined') return
+
+  chartViewportObserver = new ResizeObserver(entries => {
+    const entry = entries[0]
+    chartViewportWidth.value = Math.floor(entry.contentRect.width)
+    scheduleChartLayout()
+  })
+  chartViewportObserver.observe(chartViewport.value)
+}
+
+function xTickLimit(labelCount) {
+  const width = chartCanvasWidth.value || chartViewportWidth.value || 800
+  const target = mode.value === 'monthly' ? 92 : 72
+  return Math.min(labelCount, Math.max(6, Math.floor(width / target)))
+}
+
+function scheduleChartLayout() {
+  if (!chart) return
+  if (chartLayoutFrame) cancelAnimationFrame(chartLayoutFrame)
+  chartLayoutFrame = requestAnimationFrame(() => {
+    chartLayoutFrame = null
+    if (!chart) return
+    const labelCount = chart.data?.labels?.length || 0
+    if (chart.options?.scales?.x?.ticks) {
+      chart.options.scales.x.ticks.maxTicksLimit = xTickLimit(labelCount)
+    }
+    chart.resize()
+    chart.update('none')
+  })
+}
+
+function adjustChartZoom(delta) {
+  chartZoom.value = clamp(Math.round((chartZoom.value + delta) * 10) / 10, 1, 3)
+  nextTick(scheduleChartLayout)
+}
+
+function resetChartZoom() {
+  chartZoom.value = 1
+  nextTick(() => {
+    if (chartViewport.value) {
+      chartViewport.value.scrollTo({ left: 0, behavior: 'smooth' })
+    }
+    scheduleChartLayout()
+  })
+}
+
+function handleChartWheel(event) {
+  if (!chartViewport.value) return
+
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault()
+    const oldWidth = chartCanvasWidth.value
+    const oldZoom = chartZoom.value
+    const delta = event.deltaY < 0 ? 0.15 : -0.15
+    const nextZoom = clamp(Math.round((oldZoom + delta) * 20) / 20, 1, 3)
+    if (nextZoom === oldZoom) return
+
+    const rect = chartViewport.value.getBoundingClientRect()
+    const cursorX = event.clientX - rect.left
+    const ratio = oldWidth > 0
+      ? (chartViewport.value.scrollLeft + cursorX) / oldWidth
+      : 0
+
+    chartZoom.value = nextZoom
+    nextTick(() => {
+      if (!chartViewport.value) return
+      const nextLeft = ratio * chartCanvasWidth.value - cursorX
+      chartViewport.value.scrollLeft = Math.max(0, nextLeft)
+      scheduleChartLayout()
+    })
+    return
+  }
+
+  if (event.shiftKey && Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+    event.preventDefault()
+    chartViewport.value.scrollBy({ left: event.deltaY, behavior: 'smooth' })
+  }
+}
+
+function startChartPan(event) {
+  if (event.button !== 0 || !chartViewport.value) return
+  if (chartViewport.value.scrollWidth <= chartViewport.value.clientWidth + 1) return
+
+  isChartPanning.value = true
+  chartPanStart = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    scrollLeft: chartViewport.value.scrollLeft,
+  }
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+}
+
+function moveChartPan(event) {
+  if (!isChartPanning.value || !chartPanStart || event.pointerId !== chartPanStart.pointerId) return
+  event.preventDefault()
+  chartViewport.value.scrollLeft = chartPanStart.scrollLeft - (event.clientX - chartPanStart.x)
+}
+
+function stopChartPan(event) {
+  if (!isChartPanning.value) return
+  const target = event?.currentTarget
+  const pointerId = chartPanStart?.pointerId
+  if (pointerId !== undefined && target?.hasPointerCapture?.(pointerId)) {
+    target.releasePointerCapture(pointerId)
+  }
+  isChartPanning.value = false
+  chartPanStart = null
+}
+
 async function buildChart() {
   error.value = null
+  destroyChart()
 
   if (!props.pixelData) return
   if (recordCount.value === 0) return   // handled in template
 
   await nextTick()
+  attachChartViewportObserver()
   if (!chartCanvas.value) return
-
-  if (chart) { chart.destroy(); chart = null }
 
   const cfg = LAYER_CONFIG[selectedLayer.value] || { full_name: selectedLayer.value, unit: '' }
   const unitLabel = cfg.unit
     ? `${cfg.full_name} (${cfg.unit})`
     : cfg.full_name
 
-  const textColor   = '#222'
-  const gridColor   = 'rgba(60,60,60,0.08)'
-  const tooltipBg   = '#fff'
-  const tooltipBorder = '#222'
+  const isGlass = props.theme === 'glass'
+  const textColor = isGlass ? '#eaf6fc' : '#222'
+  const gridColor = isGlass ? 'rgba(205,225,238,0.14)' : 'rgba(60,60,60,0.08)'
+  const tooltipBg = isGlass ? 'rgba(8,15,22,0.96)' : '#fff'
+  const tooltipBorder = isGlass ? 'rgba(130,185,220,0.4)' : '#222'
+  const canvasBg = isGlass ? 'rgba(7,14,20,0.42)' : '#fff'
 
   if (mode.value === 'monthly') {
-    renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel })
+    renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel, canvasBg })
   } else {
-    renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel })
+    renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel, canvasBg })
   }
 }
 
-// ── Monthly: single continuous timeline ──────────────────────────────────
-function renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel }) {
-  const monthly = buildMonthlyAvg(currentRecords.value)
-  if (monthly.length === 0) {
-    error.value = 'No monthly data to display'
+// ── Timeline: one point for each available raster date ───────────────────
+function renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel, canvasBg }) {
+  const observations = buildObservationSeries(currentRecords.value)
+  if (observations.length === 0) {
+    error.value = 'No raster observations to display'
     return
   }
 
-  const labels = monthly.map(m => {
-    const [y, mo] = m.monthKey.split('-')
-    return `${MONTH_NAMES_SHORT[mo]} ${y}`
-  })
-  const values = monthly.map(m => Math.round(m.value * 10000) / 10000)
+  const labels = observations.map(o => formatDateLabel(o.date))
+  const values = observations.map(o => Math.round(o.value * 10000) / 10000)
+  const densePoints = values.length > 140
 
   const color = '#3b9fd9'
   const ctx = chartCanvas.value.getContext('2d')
@@ -278,13 +510,13 @@ function renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLab
         data: values,
         borderColor: color,
         backgroundColor: gradient,
-        borderWidth: 2.8,
+        borderWidth: densePoints ? 2.2 : 2.8,
         tension: 0.35,
-        pointRadius: 3.5,
-        pointHoverRadius: 7,
+        pointRadius: densePoints ? 2.2 : 3.5,
+        pointHoverRadius: densePoints ? 6 : 7,
         pointBackgroundColor: color,
         pointBorderColor: '#fff',
-        pointBorderWidth: 2,
+        pointBorderWidth: densePoints ? 1.5 : 2,
         fill: true,
         spanGaps: false,
       }],
@@ -293,8 +525,9 @@ function renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLab
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 8, right: 12, bottom: 6, left: 4 } },
       plugins: {
-        canvasBackgroundPlugin: { color: '#fff' },
+        canvasBackgroundPlugin: { color: canvasBg },
         legend: {
           display: true,
           position: 'top',
@@ -329,7 +562,7 @@ function renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLab
             font: { size: 10, family: "'Inter','Segoe UI',sans-serif", weight: '500' },
             maxRotation: 45,
             autoSkip: true,
-            maxTicksLimit: 24,
+            maxTicksLimit: xTickLimit(labels.length),
           },
         },
         y: {
@@ -351,7 +584,7 @@ function renderMonthly({ textColor, gridColor, tooltipBg, tooltipBorder, unitLab
 }
 
 // ── Cumulative: one line per season ──────────────────────────────────────
-function renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel }) {
+function renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unitLabel, canvasBg }) {
   const seasonData = buildSeasonData(currentRecords.value)
   if (seasonData.length === 0) {
     error.value = 'No seasonal data to display'
@@ -387,8 +620,9 @@ function renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unit
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 8, right: 12, bottom: 6, left: 4 } },
       plugins: {
-        canvasBackgroundPlugin: { color: '#fff' },
+        canvasBackgroundPlugin: { color: canvasBg },
         legend: {
           display: true,
           position: 'bottom',
@@ -424,6 +658,7 @@ function renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unit
           ticks: {
             color: textColor,
             font: { size: 11, family: "'Inter','Segoe UI',sans-serif", weight: '500' },
+            maxTicksLimit: xTickLimit(xLabels.length),
           },
         },
         y: {
@@ -445,12 +680,44 @@ function renderCumulative({ textColor, gridColor, tooltipBg, tooltipBorder, unit
 }
 
 // ── Watchers & lifecycle ──────────────────────────────────────────────────
-watch(() => props.pixelData, () => { buildChart() })
-watch(selectedLayer,          () => { buildChart() })
-watch(mode,                   () => { buildChart() })
+watch(() => props.pixelData, () => { buildChart() }, { flush: 'post' })
+watch(() => props.initialLayer, layer => {
+  if (!props.modelLayer && layer && layer !== selectedLayer.value) selectedLayer.value = layer
+})
+watch(() => props.modelLayer, layer => {
+  if (layer && layer !== selectedLayer.value) selectedLayer.value = layer
+})
+watch(() => props.modelMode, nextMode => {
+  if (nextMode && nextMode !== mode.value) mode.value = nextMode
+})
+watch(() => props.modelZoom, nextZoom => {
+  const normalized = clamp(Number(nextZoom) || 1, 1, 3)
+  if (normalized !== chartZoom.value) chartZoom.value = normalized
+})
+watch(selectedLayer, layer => {
+  emit('update:modelLayer', layer)
+  buildChart()
+}, { flush: 'post' })
+watch(mode, nextMode => {
+  emit('update:modelMode', nextMode)
+  buildChart()
+}, { flush: 'post' })
+watch(chartZoom, nextZoom => {
+  emit('update:modelZoom', nextZoom)
+  nextTick(scheduleChartLayout)
+}, { flush: 'post' })
+watch(chartCanvasWidth, () => { nextTick(scheduleChartLayout) }, { flush: 'post' })
 
-onMounted(() => { buildChart() })
-onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
+onMounted(() => {
+  window.addEventListener('resize', measureChartViewport)
+  buildChart()
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', measureChartViewport)
+  if (chartLayoutFrame) cancelAnimationFrame(chartLayoutFrame)
+  if (chartViewportObserver) chartViewportObserver.disconnect()
+  destroyChart()
+})
 </script>
 
 <style scoped>
@@ -466,10 +733,21 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   color: #1b485f;
   font-family: 'Inter', 'Segoe UI', sans-serif;
 }
+.chart-container.glass {
+  padding: 0;
+  background: transparent;
+  color: #eaf6fc;
+}
+.chart-container.compact {
+  gap: 0;
+}
 
 /* ── Pixel header ── */
 .pixel-header {
   margin-bottom: 0.85rem;
+}
+.chart-container.compact .pixel-header {
+  margin-bottom: 0.65rem;
 }
 .pixel-meta {
   display: flex;
@@ -491,54 +769,133 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.04em;
 }
+.chart-container.glass .pixel-id-badge {
+  background: rgba(59, 159, 217, 0.14);
+  border-color: rgba(59, 159, 217, 0.36);
+  color: #92cdf8;
+}
 .pixel-coords {
   font-size: 0.77rem;
   color: #607d8b;
   font-family: 'JetBrains Mono', monospace;
 }
+.chart-container.glass .pixel-coords {
+  color: #9db8c9;
+}
 
 /* ── Controls (reuse DataChart styles exactly) ── */
 .chart-controls {
   display: flex;
-  align-items: center;
-  gap: 1.5rem;
+  align-items: flex-end;
+  gap: 0.75rem;
   margin-bottom: 1rem;
   flex-wrap: wrap;
+}
+.chart-container.compact .chart-controls {
+  margin-bottom: 0.75rem;
 }
 .control-group {
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
+.layer-control {
+  flex: 1 1 230px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-width: 310px;
+}
+.view-control {
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
 .control-group label {
-  font-size: 0.875rem;
+  font-size: 0.73rem;
   font-weight: 600;
   color: #0d1012;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
-.select-wrapper { position: relative; }
+.chart-container.glass .control-group label {
+  color: #c7dbe7;
+}
+.layer-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+.layer-tab {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid rgba(180, 205, 222, 0.12);
+  border-radius: 10px;
+  color: #a8bfd0;
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.layer-tab:hover {
+  transform: translateY(-1px);
+  border-color: rgba(120, 180, 220, 0.28);
+  color: #f4fbff;
+}
+.layer-tab.active {
+  color: #041015;
+  border-color: transparent;
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.18);
+}
+.layer-tab.savi.active { background: linear-gradient(135deg, #6ee787, #3bbd52); }
+.layer-tab.kc.active   { background: linear-gradient(135deg, #70b7ff, #3679df); }
+.layer-tab.cwr.active  { background: linear-gradient(135deg, #ffd36c, #f59e0b); }
+.layer-tab.iwr.active  { background: linear-gradient(135deg, #d59cff, #9b5de5); }
+.layer-tab.etc.active  { background: linear-gradient(135deg, #70f1f5, #19b6d2); }
+.select-wrapper {
+  position: relative;
+  width: 100%;
+}
 .select {
-  padding: 0.45rem 2.25rem 0.45rem 1rem;
-  border: 1px solid rgba(200, 210, 220, 0.2);
-  border-radius: 30px;
-  background: #0d1319;
-  font-size: 0.875rem;
+  width: 100%;
+  height: 40px;
+  padding: 0.45rem 2.35rem 0.45rem 0.9rem;
+  border: 1px solid rgba(180, 205, 222, 0.16);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.035)),
+    rgba(7, 14, 20, 0.62);
+  backdrop-filter: blur(16px);
+  font-size: 0.86rem;
+  font-weight: 800;
   color: #f0f4f8;
   outline: none;
   cursor: pointer;
   appearance: none;
-  min-width: 260px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  min-width: 0;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
 }
-.select:hover { border-color: #2f855a; }
-.select:focus { border-color: #2b6cb0; box-shadow: 0 0 0 4px rgba(43,108,176,0.12); }
+.select option {
+  background: #101922;
+  color: #eaf6fc;
+}
+.select:hover { border-color: rgba(59, 159, 217, 0.45); }
+.select:focus {
+  border-color: rgba(59, 159, 217, 0.72);
+  box-shadow: 0 0 0 4px rgba(59, 159, 217, 0.14);
+}
 .select-arrow {
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  color: #8899aa;
+  color: #98c8e7;
+  display: inline-flex;
 }
 .toggle-switch {
   display: flex;
@@ -547,13 +904,18 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   padding: 3px;
   gap: 2px;
 }
+.chart-container.glass .toggle-switch {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(180, 205, 222, 0.1);
+}
 .toggle-option {
-  padding: 0.4rem 1rem;
+  height: 32px;
+  padding: 0 0.95rem;
   border: none;
   background: transparent;
   border-radius: 30px;
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: 0.82rem;
+  font-weight: 700;
   color: #8899aa;
   cursor: pointer;
   transition: all 0.2s;
@@ -563,18 +925,55 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   color: #f0f4f8;
   box-shadow: 0 6px 16px rgba(47, 133, 90, 0.3);
 }
-.chart-type-badge {
-  display: flex;
+.chart-container.glass .toggle-option.active {
+  background: #3b9fd9;
+  box-shadow: 0 8px 20px rgba(59, 159, 217, 0.25);
+}
+.chart-toolbar {
+  height: 40px;
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-left: auto;
-  padding: 0.35rem 0.85rem;
-  background: rgba(47, 133, 90, 0.15);
-  border: 1px solid rgba(47, 133, 90, 0.3);
-  border-radius: 20px;
-  font-size: 0.78rem;
-  font-weight: 500;
-  color: #3b9fd9;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(180, 205, 222, 0.12);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.055);
+}
+.chart-tool {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  color: #b9d8eb;
+  background: rgba(255, 255, 255, 0.055);
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease, opacity 0.18s ease;
+}
+.chart-tool:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: #ffffff;
+  background: rgba(59, 159, 217, 0.22);
+}
+.chart-tool:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+.chart-zoom-value {
+  width: 44px;
+  text-align: center;
+  color: #9fb7c6;
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.chart-container.glass .chart-type-badge {
+  background: rgba(59, 159, 217, 0.12);
+  border-color: rgba(59, 159, 217, 0.24);
+  color: #91d5ff;
 }
 
 /* ── Loading ── */
@@ -582,21 +981,57 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
-  gap: 0.75rem;
+  gap: 0.85rem;
   color: #8899aa;
   font-size: 0.9rem;
 }
-.spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid rgba(200, 210, 220, 0.2);
-  border-top-color: #2f855a;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+.chart-container.glass .loading-overlay {
+  color: #9fb7c6;
+}
+.chart-skeleton-line,
+.chart-skeleton-panel,
+.chart-skeleton-panel span {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.chart-skeleton-line {
+  height: 14px;
+  max-width: 100%;
+}
+.chart-skeleton-line.short {
+  width: 42%;
+}
+.chart-skeleton-panel {
+  height: min(280px, 46vh);
+  display: grid;
+  grid-template-columns: repeat(8, minmax(18px, 1fr));
+  align-items: end;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid rgba(180, 205, 222, 0.1);
+}
+.chart-skeleton-panel span {
+  min-height: 52px;
+  height: 58%;
+}
+.chart-skeleton-panel span:nth-child(2n) { height: 46%; }
+.chart-skeleton-panel span:nth-child(3n) { height: 68%; }
+.chart-skeleton-line::after,
+.chart-skeleton-panel::after,
+.chart-skeleton-panel span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+  animation: shimmer 1.35s ease-in-out infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shimmer { to { transform: translateX(100%); } }
 
 /* ── Error / no-data ── */
 .error-box {
@@ -613,10 +1048,20 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   padding: 1.5rem;
   margin: 0.5rem 0;
 }
+.chart-container.glass .error-box {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.16);
+  border-color: rgba(248, 113, 113, 0.25);
+}
 .no-data-box {
   color: #64748b;
   background: rgba(100, 116, 139, 0.08);
   border-color: rgba(100, 116, 139, 0.25);
+}
+.chart-container.glass .no-data-box {
+  color: #a8bfd0;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(180, 205, 222, 0.12);
 }
 
 /* ── Chart wrapper (reuse DataChart) ── */
@@ -628,13 +1073,95 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   background: #fff;
   border: 1px solid rgba(60, 60, 60, 0.08);
   border-radius: 16px;
-  padding: 0.75rem;
+  padding: 0;
+  overflow: hidden;
+}
+.chart-container.glass .chart-wrapper {
+  background: rgba(7, 14, 20, 0.38);
+  border-color: rgba(180, 205, 222, 0.12);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 28px rgba(1, 10, 17, 0.12);
+}
+.chart-viewport {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  cursor: grab;
+  scrollbar-color: rgba(59, 159, 217, 0.58) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
+}
+.chart-wrapper.panning .chart-viewport {
+  cursor: grabbing;
+  user-select: none;
+}
+.chart-viewport::-webkit-scrollbar {
+  height: 10px;
+}
+.chart-viewport::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.045);
+  border-radius: 999px;
+}
+.chart-viewport::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, rgba(59, 159, 217, 0.72), rgba(111, 231, 135, 0.58));
+  border-radius: 999px;
+  border: 2px solid rgba(7, 14, 20, 0.38);
+}
+.chart-scroll-spacer {
+  position: relative;
+  min-width: 100%;
+  height: 100%;
+  transition: width 0.24s ease;
 }
 .chart {
   position: absolute !important;
-  top: 0; left: 0;
+  inset: 0;
   width: 100% !important;
   height: 100% !important;
+}
+
+.pixel-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.stat-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(60, 60, 60, 0.08);
+  border-radius: 12px;
+  background: rgba(40, 95, 150, 0.06);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.stat-card span {
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.stat-card strong {
+  color: #1b485f;
+  font-size: 0.95rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+.chart-container.glass .stat-card {
+  border-color: rgba(180, 205, 222, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+}
+.chart-container.glass .stat-card span {
+  color: #8ba8bb;
+}
+.chart-container.glass .stat-card strong {
+  color: #74f08b;
 }
 
 /* ── Record hint ── */
@@ -644,13 +1171,30 @@ onUnmounted(() => { if (chart) { chart.destroy(); chart = null } })
   text-align: right;
   padding: 4px 2px 0;
 }
+.chart-container.glass .record-hint {
+  color: #8ba8bb;
+}
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .chart-container { padding: 1rem; }
+  .chart-container.glass { padding: 0; }
   .chart-controls { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
   .control-group { width: 100%; }
+  .layer-control { max-width: none; }
+  .view-control { width: 100%; }
+  .toggle-switch { width: 100%; }
+  .toggle-option { flex: 1; }
   .select { min-width: 0; width: 100%; }
+  .chart-toolbar { width: 100%; justify-content: center; }
   .chart-type-badge { margin-left: 0; }
+  .layer-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pixel-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 480px) {
+  .layer-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layer-tab { height: 36px; font-size: 0.78rem; }
+  .pixel-stats { gap: 8px; }
 }
 </style>
