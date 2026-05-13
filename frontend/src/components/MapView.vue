@@ -21,11 +21,9 @@
         </button>
       </div>
     </div>
-
-    
-
     <!-- Info Panel (shown on map click / My Location) -->
-    <div class="info-panel" v-if="pointData" :class="{ 'light': !isDarkMode }">
+    <div class="info-panel" v-if="pointData && showInfoPanel" :class="{ 'light': !isDarkMode }">
+      <button class="close-btn" type="button" @click="showInfoPanel = false" aria-label="Close info panel">×</button>
       <h3>📍 Selected Point</h3>
 
       <!-- Sentinel acquisition date + coordinates -->
@@ -200,10 +198,6 @@
         </p>
       </div>
     </div>
-
-
-
-
     <!-- ── Floating Pixel Trend Widget ─────────────────────────────────── -->
     <Transition name="pixel-widget-fade" appear>
       <aside
@@ -356,6 +350,7 @@ const pixelWidgetFrame        = reactive({
   height: 650,
   initialized: false,
 })
+const showInfoPanel = ref(true)
 const pixelResizeHandles      = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw']
 const pixelRequestGroup       = `${Date.now()}-${Math.random().toString(36).slice(2)}`
 let pixelTimeSeriesRequestId  = 0
@@ -4682,15 +4677,16 @@ defineExpose({
     linear-gradient(180deg, rgba(5, 8, 14, 0.96), rgba(8, 12, 18, 0.94)),
     radial-gradient(circle at top right, rgba(25, 199, 166, 0.08), transparent 34%);
   backdrop-filter: blur(16px);
-  padding: 18px 18px 14px;
-  border-radius: 22px;
+  padding: 14px 14px 12px;
+  border-radius: 18px;
   border: 1px solid rgba(200, 210, 220, 0.1);
   z-index: 1000;
-  width: 360px;
-  max-width: 90vw;
-  max-height: 75vh;
+  width: min(92vw, 360px);
+  min-width: 240px;
+  max-width: 92vw;
+  max-height: 72vh;
   overflow-y: auto;
-  box-shadow: 0 24px 52px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
   color: #f0f4f8;
   scrollbar-width: thin;
   scrollbar-color: rgba(47, 133, 90, 0.3) transparent;
@@ -4723,19 +4719,19 @@ defineExpose({
 .meta-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 10px;
-  border-radius: 12px;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(200, 210, 220, 0.06);
   margin-bottom: 6px;
   font-family: 'JetBrains Mono', monospace;
 }
-.meta-icon  { font-size: 0.9rem; flex-shrink: 0; }
-.meta-label { color: #8899aa; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.67rem; flex-shrink: 0; }
-.meta-val   { margin-left: auto; font-weight: 600; text-align: right; font-size: 0.73rem; color: #d0dbe5; }
+.meta-icon  { font-size: 0.84rem; flex-shrink: 0; }
+.meta-label { color: #8899aa; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.62rem; flex-shrink: 0; }
+.meta-val   { margin-left: auto; font-weight: 600; text-align: right; font-size: 0.68rem; color: #d0dbe5; }
 .sentinel-date { color: #3b9fd9; }
-.coord-val     { color: #8899aa; font-size: 0.7rem; }
+.coord-val     { color: #8899aa; font-size: 0.66rem; }
 .weather-row { cursor: pointer; }
 .weather-link {
   display: flex;
@@ -4751,9 +4747,9 @@ defineExpose({
 .forecast-grid {
   display: flex;
   flex-direction: row;
-  gap: 6px;
+  gap: 5px;
   overflow-x: auto;
-  padding: 2px 0 8px;
+  padding: 2px 0 6px;
   scrollbar-width: none;
 }
 .forecast-grid::-webkit-scrollbar { display: none; }
@@ -4763,11 +4759,11 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 8px 6px;
+  gap: 4px;
+  padding: 6px 5px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
-  min-width: 76px;
+  min-width: 64px;
   flex: 1;
   transition: all 0.2s ease;
   border: 1px solid rgba(200, 210, 220, 0.06);
@@ -4781,7 +4777,7 @@ defineExpose({
 }
 
 .fc-label {
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   color: #8899aa;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -4792,22 +4788,22 @@ defineExpose({
 .fc-na { opacity: 0.5; }
 .unit {
   font-style: normal;
-  font-size: 0.68rem;
-  opacity: 0.7;
+  font-size: 0.64rem;
+  opacity: 0.75;
   margin-left: 3px;
 }
 .nodata-chip {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   color: #8899aa;
   font-style: italic;
   font-family: 'JetBrains Mono', monospace;
 }
 .nodata-hint {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: #8899aa;
   font-style: italic;
   margin: 4px 0 0;
-  padding: 6px 10px;
+  padding: 5px 8px;
   background: rgba(255, 255, 255, 0.03);
   border-radius: 10px;
 }
@@ -4829,16 +4825,16 @@ defineExpose({
 
 .close-btn {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 8px;
+  right: 8px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(170, 199, 216, 0.12);
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   line-height: 1;
   cursor: pointer;
   color: #8ca6b8;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4848,9 +4844,9 @@ defineExpose({
 .close-btn:hover { background: rgba(25, 199, 166, 0.12); color: #88f2db; border-color: rgba(25, 199, 166, 0.28); }
 
 .info-panel h3 {
-  margin: 0 0 10px 0;
+  margin: 0 0 8px 0;
   color: #effbff;
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -4858,24 +4854,24 @@ defineExpose({
 }
 
 .info-panel p {
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   color: #8ca6b8;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   font-family: 'JetBrains Mono', monospace;
-  background: rgba(255, 255, 255, 0.05) !important;
-  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04) !important;
+  padding: 5px 8px;
   border-radius: 10px;
 }
 
 .value-section {
-  margin-top: 14px;
-  padding-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid rgba(170, 199, 216, 0.1);
 }
 
 .value-section h4 {
-  margin: 0 0 10px 0;
-  font-size: 0.75rem;
+  margin: 0 0 8px 0;
+  font-size: 0.72rem;
   font-weight: 700;
   color: #b9cfdd;
   text-transform: uppercase;

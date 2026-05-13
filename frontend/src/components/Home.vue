@@ -91,37 +91,128 @@
 
     <!-- ══════════════════ STUDY REGION ══════════════════ -->
     <section class="region-section" id="region">
-      <div class="section-inner">
-        <div class="region-card">
-          <div class="region-text">
-            <span class="section-tag">Study Region</span>
-            <h2 class="section-title" style="text-align:left;margin-bottom:16px">
-              Rabi Wheat Belt —<br>Udham Singh Nagar
-            </h2>
-            <p class="region-desc">
-              The system is applied to the <strong>Rabi wheat-growing region</strong> of Udham Singh Nagar in Uttarakhand —
-              characterised by fertile soils, high cropping intensity, and a strong dependence on irrigation due to minimal
-              rainfall during the Rabi season.
-            </p>
-            <p class="region-desc">
-              Wheat cultivation spans approximately <strong>150 days</strong>, with water requirements varying significantly
-              across different growth stages, making precise irrigation planning essential for maintaining crop health and yield.
-            </p>
-            <div class="region-tags">
-              <span class="rtag"> Uttarakhand, India</span>
-              <span class="rtag"> Rabi Wheat</span>
-              <span class="rtag"> Irrigation-Dependent</span>
+
+      <!-- Section Header -->
+      <div class="region-header">
+        <span class="section-tag">🌾 Study Region</span>
+        <h2 class="section-title" style="margin-bottom:12px">Rabi Wheat Belt — Udham Singh Nagar</h2>
+        <p class="section-subtitle">Field observations, ground-truth data, and satellite-derived indicators
+        from Uttarakhand's most irrigation-intensive district.</p>
+      </div>
+
+      <!-- Main Content Grid: Text left, Gallery right -->
+      <div class="region-full-width">
+        <div class="region-main-grid">
+
+          <!-- ── Left: Info Panel ── -->
+          <div class="region-info-panel">
+            <div class="region-info-block">
+              <div class="rib-icon">🗺️</div>
+              <div>
+                <h4 class="rib-title">Location</h4>
+                <p class="rib-desc">Udham Singh Nagar, Uttarakhand, India — a terai district bordering UP, characterised by flat alluvial plains and canal-fed agriculture.</p>
+              </div>
+            </div>
+            <div class="region-info-block">
+              <div class="rib-icon">🌾</div>
+              <div>
+                <h4 class="rib-title">Crop & Season</h4>
+                <p class="rib-desc"><strong>Rabi Wheat</strong> is the primary crop, sown in November and harvested by April — spanning ~150 days with highly variable water demand across growth stages.</p>
+              </div>
+            </div>
+            <div class="region-info-block">
+              <div class="rib-icon">🛰️</div>
+              <div>
+                <h4 class="rib-title">ET Monitoring</h4>
+                <p class="rib-desc">An Eddy Covariance tower (LAS &amp; MMT) continuously measures actual evapotranspiration, validated against satellite-derived estimates.</p>
+              </div>
+            </div>
+            <div class="region-info-block">
+              <div class="rib-icon">💧</div>
+              <div>
+                <h4 class="rib-title">Irrigation Need</h4>
+                <p class="rib-desc">Minimal Rabi rainfall makes the region <strong>entirely dependent on irrigation</strong>, making precise scheduling critical for water conservation.</p>
+              </div>
+            </div>
+            <div class="region-info-block">
+              <div class="rib-icon">📊</div>
+              <div>
+                <h4 class="rib-title">Data Integration</h4>
+                <p class="rib-desc">Extensive datasets from satellite imagery are cross-referenced with ground-level sensors to ensure highly accurate predictive models for crop water needs.</p>
+              </div>
+            </div>
+            <div class="region-info-block">
+              <div class="rib-icon">🌱</div>
+              <div>
+                <h4 class="rib-title">Yield Optimization</h4>
+                <p class="rib-desc">By fine-tuning irrigation schedules based on our rigorous monitoring, farmers can maximize wheat yield while minimizing water waste.</p>
+              </div>
             </div>
           </div>
-          <!-- Region image -->
-          <div class="region-image-wrap">
-            <img src="/assets/barley.png" alt="Study Region" class="region-image" onerror="this.parentElement.classList.add('img-fallback')" />
-            <div class="region-image-overlay">
-              
+
+          <!-- ── Right: Photo Mosaic ── -->
+          <div class="region-mosaic">
+            <!-- Large hero image -->
+            <div class="mosaic-hero">
+              <img src="/assets/images2.jpeg" alt="Wheat field researcher" class="mosaic-img" />
+              <div class="mosaic-label">Rabi Wheat — Field Observation, Udham Singh Nagar</div>
+            </div>
+            <!-- Three smaller images -->
+            <div class="mosaic-trio">
+              <div class="mosaic-cell">
+                <img src="/assets/tower.jpg" alt="ET Measurement Tower" class="mosaic-img" />
+                <div class="mosaic-label">ET Flux Tower</div>
+              </div>
+              <div class="mosaic-cell">
+                <img src="/assets/images4.jpeg" alt="Weather stations in wheat field" class="mosaic-img" />
+                <div class="mosaic-label">Agro-Met Stations</div>
+              </div>
+              <div class="mosaic-cell">
+                <img src="/assets/map.jpeg" alt="Udham Singh Nagar map" class="mosaic-img map-cell" />
+                <div class="mosaic-label">District Boundary</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ── Bottom: Full-width Field Equipment Strip ── -->
+      <div class="region-strip">
+        <div class="section-inner">
+          <p class="strip-eyebrow">Field Infrastructure &amp; Instruments</p>
+          <div class="region-strip-grid">
+            <div class="rs-card">
+              <div class="rs-img-wrap">
+                <img src="/assets/image1.jpeg" alt="Weather monitoring station" class="rs-img" />
+              </div>
+              <div class="rs-body">
+                <h5 class="rs-title">Agro-Met Weather Station</h5>
+                <p class="rs-desc">Real-time sensors for wind speed, humidity, temperature and solar radiation — feeding meteorological data to the ET model.</p>
+              </div>
+            </div>
+            <div class="rs-card">
+              <div class="rs-img-wrap">
+                <img src="/assets/images3.jpeg" alt="Eddy covariance flux tower" class="rs-img" />
+              </div>
+              <div class="rs-body">
+                <h5 class="rs-title">Eddy Covariance System</h5>
+                <p class="rs-desc">The LAS &amp; MMT towers measure actual crop evapotranspiration at field scale, used to validate satellite-based estimates.</p>
+              </div>
+            </div>
+            <div class="rs-card rs-card-wide">
+              <div class="rs-img-wrap rs-img-wide">
+                <img src="/assets/towercrop.jpg" alt="ET Station and LAI measurements" class="rs-img" />
+              </div>
+              <div class="rs-body">
+                <h5 class="rs-title">ET Station — Seasonal LAI &amp; NDVI Monitoring</h5>
+                <p class="rs-desc">Monthly LAI measurements (Sept–Apr) alongside NDVI maps capture the full crop growth cycle from transplanting to harvest, anchoring satellite calibration.</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
+
     </section>
 
     <!-- ══════════════════ OVERVIEW STATS ══════════════════ -->
@@ -180,19 +271,6 @@ const particles = Array.from({ length: 18 }, (_, i) => ({
   delay: Math.random() * 10, dur: 8 + Math.random() * 10,
   size: 2 + Math.random() * 4, op: 0.08 + Math.random() * 0.22,
 }))
-
-const overviewStats = [
-  { icon: '🌾', value: '150 days', label: 'Rabi wheat season' },
-  { icon: '💧', value: '5 layers', label: 'Irrigation indicators' },
-  { icon: '📍', value: 'Udham Singh Nagar', label: 'Study region' },
-]
-
-const footerTech = [
-  { icon: '🛰️', name: 'Satellite', role: 'Raster crop indicators' },
-  { icon: '🗺️', name: 'Leaflet', role: 'Interactive map layers' },
-  { icon: '📈', name: 'Chart.js', role: 'Time-series charts' },
-]
-
 </script>
 
 <style scoped>
@@ -706,42 +784,265 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 
 
 /* ──────────────────────────────────────────────────────────────────────
-   STUDY REGION 
+   STUDY REGION  — Enhanced
    ────────────────────────────────────────────────────────────────────── */
-.region-section { padding: 100px 24px; background: var(--bg-secondary); position: relative; z-index: 1; }
-.region-card { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+.region-section {
+  padding: 90px 0 0;
+  background: #0b1827 !important;
+  position: relative; z-index: 1;
+  overflow: hidden;
+  border: none;
+}
+
+/* ── Header ── */
+.region-header {
+  text-align: center;
+  padding: 0 24px 60px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.region-header .section-title { color: #0F172A !important; }
+.region-header .section-subtitle { color: #334155 !important; }
+
+/* ── Main Grid ── */
+.region-full-width {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+}
+.region-main-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  align-items: stretch;
+  padding-bottom: 0;
+  width: 100%;
+}
+
+/* ── Left Info Panel ── */
+.region-info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 60px 8%;
+  justify-content: center;
+  background: #0b1827;
+}
+.region-info-block {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 24px 0;
+  border-bottom: none;
+}
+.region-info-block:last-of-type { border-bottom: none; }
+.rib-icon {
+  flex-shrink: 0;
+  width: 52px; height: 52px;
+  border-radius: 12px;
+  background: rgba(13, 148, 136, 0.1);
+  border: none;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem;
+}
+.rib-title {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.15rem; font-weight: 700;
+  color: #0F172A !important; margin: 0 0 6px;
+}
+.rib-desc {
+  font-size: 0.95rem; color: #334155 !important;
+  line-height: 1.7; margin: 0;
+}
+.rib-desc strong { color: #0F172A !important; font-weight: 700; }
+
+/* Quick Stats */
+.region-quick-stats {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px 24px;
+  margin: 20px 0 16px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+}
+.rqs-item { flex: 1; text-align: center; }
+.rqs-val {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.6rem; font-weight: 800;
+  color: var(--accent-teal);
+  text-shadow: 0 0 14px rgba(0,212,168,0.35);
+}
+.rqs-label {
+  display: block;
+  font-size: 0.7rem; font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+.rqs-divider {
+  width: 1px; height: 44px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* Tags */
 .region-desc {
   font-size: 1rem; color: var(--text-secondary); line-height: 1.8; margin: 0 0 20px;
 }
 .region-desc strong { color: var(--text-primary); font-weight: 600; }
-.region-tags { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+.region-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .rtag {
-  padding: 6px 18px; border-radius: 50px;
+  padding: 6px 14px; border-radius: 50px;
   border: 1px solid var(--border);
-  background: var(--surface); font-size: 0.8rem; font-weight: 500;
+  background: var(--surface); font-size: 0.78rem; font-weight: 500;
   color: var(--text-secondary); white-space: nowrap;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+  transition: all 0.2s ease;
+}
+.rtag:hover { border-color: var(--accent-teal); color: var(--accent-teal); transform: translateY(-2px); }
+
+/* ── Right: Photo Mosaic ── */
+.region-mosaic {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+}
+.mosaic-hero {
+  position: relative;
+  border-radius: 0;
+  overflow: hidden;
+  aspect-ratio: 1/1;
+  border: none;
+  box-shadow: none;
+  width: 100%;
+}
+.mosaic-trio {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  width: 100%;
+}
+.mosaic-cell {
+  position: relative;
+  border-radius: 0;
+  overflow: hidden;
+  aspect-ratio: 1/1;
+  border: none;
+  box-shadow: none;
+}
+.mosaic-img {
+  width: 50%; height: 50%;
+  object-fit: cover; object-position: center;
+  display: block;
+  transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.map-cell .mosaic-img { object-fit: contain; background: #fff; }
+.mosaic-hero:hover .mosaic-img,
+.mosaic-cell:hover .mosaic-img { transform: scale(1.06); }
+.mosaic-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  padding: 12px 16px;
+  background: linear-gradient(to top, rgba(15,23,42,0.8) 0%, transparent 100%);
+  color: #FFFFFF;
+  font-size: 0.75rem; font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: 'JetBrains Mono', monospace;
+}
+.home-root:not(.dark) .mosaic-label {
+  background: linear-gradient(to top, rgba(15,23,42,0.85) 0%, transparent 100%);
+  color: #FFFFFF;
 }
 
-.region-image-wrap {
-  position: relative; border-radius: 28px; overflow: hidden;
-  border: 1px solid var(--border); aspect-ratio: 4/3;
-  background: var(--card-bg); box-shadow: 0 24px 50px rgba(0,0,0,0.2);
+/* ── Bottom Strip ── */
+.region-strip {
+  background: #0b1827 !important;
+  border-top: 1px solid rgba(0,0,0,0.05);
+  padding: 60px 24px;
+  margin-top: 0;
 }
-.home-root:not(.dark) .region-image-wrap { box-shadow: 0 20px 40px rgba(0,0,0,0.08); }
-.region-image {
-  width: 100%; height: 100%; object-fit: cover; object-position: center;
-  display: block; transition: transform 0.7s cubic-bezier(0.25, 1, 0.5, 1);
+.region-section .strip-eyebrow { color: #0F172A !important; }
+.region-section .rs-title { color: #0F172A !important; }
+.region-section .rs-desc { color: #334155 !important; }
+.strip-eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem; font-weight: 700;
+  color: var(--accent-teal);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin: 0 0 28px;
 }
-.region-image-wrap:hover .region-image { transform: scale(1.05); }
+.region-strip-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr;
+  gap: 20px;
+  align-items: stretch;
+}
+.rs-card {
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.05);
+  background: #0b1827 !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.04);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.rs-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.08);
+  border-color: rgba(13,148,136,0.2);
+}
+.rs-img-wrap {
+  width: 100%;
+  aspect-ratio: 16/9;
+  overflow: hidden;
+}
+.rs-img-wide { aspect-ratio: 16/7; }
+.rs-img {
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: center;
+  display: block;
+  transition: transform 0.6s ease;
+}
+.rs-card:hover .rs-img { transform: scale(1.06); }
+.rs-body { padding: 18px 20px 22px; flex: 1; }
+.rs-title {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.95rem; font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+.rs-desc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.7; margin: 0;
+}
 
-.region-image-overlay {
-  position: absolute; inset: 0;
-  background: linear-gradient(to top, rgba(10,15,28,0.7) 0%, transparent 55%);
-  display: flex; align-items: flex-end; padding: 24px; transition: background 0.4s ease;
+/* ── Responsive ── */
+@media (max-width: 1100px) {
+  .region-main-grid { grid-template-columns: 1fr; gap: 0; }
+  .region-strip-grid { grid-template-columns: 1fr 1fr; }
+  .rs-card-wide { grid-column: 1 / -1; }
+  .rs-img-wide { aspect-ratio: 16/6; }
 }
-.home-root:not(.dark) .region-image-overlay {
-  background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 55%);
+@media (max-width: 768px) {
+  .mosaic-trio { grid-template-columns: repeat(2, 1fr); }
+  .mosaic-cell:last-child { display: none; }
+  .region-strip-grid { grid-template-columns: 1fr; }
+  .rs-card-wide { grid-column: auto; }
+}
+@media (max-width: 480px) {
+  .mosaic-trio { grid-template-columns: 1fr; }
+  .region-quick-stats { gap: 0; padding: 14px 16px; }
+  .rqs-val { font-size: 1.3rem; }
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -775,7 +1076,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
   border-top: 1px solid var(--border); padding: 10px 24px 40px;
 }
 .home-root:not(.dark) .site-footer {
-  background: #f1f5f9; /* Slate 100 - clean, distinct light gray */
+  background: #0b1827; /* Slate 100 - clean, distinct light gray */
 }
 .footer-inner {
   max-width: 1100px; margin: 0 auto; display: flex; flex-wrap: wrap;
@@ -1021,7 +1322,7 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
   box-shadow: 0 4px 14px rgba(0,0,0,0.2);
 }
 .home-root:not(.dark) .cp-msg-bot .cp-bubble {
-  background: #FFFFFF;
+  background: #0b1827;
   border: 1px solid rgba(13,148,136,0.12);
   color: #334155;
   box-shadow: 0 2px 10px rgba(0,0,0,0.06);
