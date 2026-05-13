@@ -142,7 +142,7 @@
     <!-- Chart Panel -->
     <div class="chart-panel" v-if="props.chartVisible">
       <button class="close-btn" @click="emit('update:chart-visible', false)">×</button>
-      <DataChart title="Wheat Crop Parameters - Historical Data" :initial-layer="activeLayers[0]?.name || 'savi'"
+      <DataChart title="Wheat Crop Parameters - Historical Data" :initial-layer="props.selectedLayer || activeLayers[0]?.name || 'savi'"
         :is-dark="false" :show-boundary-data="true" />
     </div>
 
@@ -205,7 +205,7 @@
 
 
     <!-- ── Floating Pixel Trend Widget ─────────────────────────────────── -->
-    <Transition name="pixel-widget-fade">
+    <Transition name="pixel-widget-fade" appear>
       <aside
         class="pixel-trend-widget"
         :class="{
@@ -306,9 +306,9 @@
             v-else-if="pixelTimeSeries"
             v-model:modelLayer="pixelWidgetLayer"
             v-model:modelMode="pixelWidgetMode"
-            v-model:modelZoom="pixelWidgetZoom"
             :pixelData="pixelTimeSeries"
-            :initialLayer="pixelWidgetLayer || activeLayers[0]?.name || 'savi'"
+            :initialLayer="pixelWidgetLayer || activeLayers[0]?.name || null"
+            :visibleLayers="activeLayers.map(layer => layer.name)"
             theme="glass"
             compact
             class="pixel-widget-chart"
@@ -345,8 +345,7 @@ const pixelTimeSeriesLoading  = ref(false)
 const pixelTimeSeriesError    = ref(null)
 const selectedPixelLocation   = ref(null)
 const pixelWidgetLayer        = ref(null)
-const pixelWidgetMode         = ref('monthly')
-const pixelWidgetZoom         = ref(1)
+const pixelWidgetMode         = ref('cumulative')
 const pixelWidgetMaximized    = ref(false)
 const pixelWidgetDragging     = ref(false)
 const pixelWidgetResizing     = ref(false)
@@ -368,11 +367,11 @@ let mapClickRequestId         = 0
 let pixelWidgetPointerState   = null
 
 const PIXEL_WIDGET_GUTTER = 12
-const PIXEL_WIDGET_MIN_WIDTH = 420
-const PIXEL_WIDGET_MIN_HEIGHT = 360
-const PIXEL_WIDGET_DEFAULT_WIDTH = 780
-const PIXEL_WIDGET_DEFAULT_HEIGHT = 650
-const PIXEL_WIDGET_MINIMIZED_HEIGHT = 58
+const PIXEL_WIDGET_MIN_WIDTH = 320
+const PIXEL_WIDGET_MIN_HEIGHT = 260
+const PIXEL_WIDGET_DEFAULT_WIDTH = 500
+const PIXEL_WIDGET_DEFAULT_HEIGHT = 360
+const PIXEL_WIDGET_MINIMIZED_HEIGHT = 44
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
@@ -616,6 +615,9 @@ async function fetchPixelTimeSeries(lat, lon) {
   pixelTimeSeries.value        = null
  
   try {
+    pixelWidgetLayer.value = props.selectedLayer || activeLayers.value[0]?.name || null
+    pixelWidgetMode.value = 'cumulative'
+
     const res = await fetch(
       `${API_BASE}/api/pixel-timeseries?lat=${lat}&lon=${lon}&request_group=${encodeURIComponent(pixelRequestGroup)}&request_id=${requestId}`,
       { signal: controller.signal, cache: 'no-store' }
@@ -685,6 +687,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  selectedLayer: {
+    type: String,
+    default: null
+  },
   chartVisible: {
     type: Boolean,
     default: false
@@ -711,6 +717,15 @@ watch(() => props.availableDates, (dates) => {
   })
   slotToDateMap.value = map
 }, { immediate: true })
+
+watch(() => props.selectedLayer, (layer) => {
+  pixelWidgetLayer.value = layer || activeLayers.value[0]?.name || null
+
+  if (layer && pixelTimeSeries.value) {
+    showPixelWidget.value = true
+    pixelWidgetMinimized.value = false
+  }
+})
 
 const mapEl = ref(null)
 let map
@@ -936,6 +951,12 @@ watch(() => props.layers, (val) => {
       }
     }
   })
+
+  pixelWidgetLayer.value = props.selectedLayer || activeLayers.value[0]?.name || null
+  if (pixelTimeSeries.value && activeLayers.value.length > 0) {
+    showPixelWidget.value = true
+    pixelWidgetMinimized.value = false
+  }
 }, { deep: true })
 
 // Watch for opacity changes
@@ -5335,11 +5356,11 @@ defineExpose({
 .pixel-trend-widget {
   position: absolute;
   z-index: 2600;
-  min-width: min(420px, calc(100% - 24px));
-  min-height: 58px;
+  min-width: min(320px, calc(100% - 24px));
+  min-height: 44px;
   display: flex;
   flex-direction: column;
-  border-radius: 20px;
+  border-radius: 16px;
   border: 1px solid rgba(180, 205, 222, 0.18);
   background:
     linear-gradient(135deg, rgba(26, 42, 55, 0.72), rgba(7, 15, 21, 0.78) 42%, rgba(10, 25, 20, 0.68)),
@@ -5354,14 +5375,14 @@ defineExpose({
   overflow: hidden;
   transform-origin: top right;
   transition:
-    left 0.24s ease,
-    top 0.24s ease,
-    width 0.24s ease,
-    height 0.24s ease,
-    border-radius 0.24s ease,
-    box-shadow 0.24s ease,
-    opacity 0.22s ease,
-    transform 0.22s ease;
+    left 0.2s ease,
+    top 0.2s ease,
+    width 0.2s ease,
+    height 0.2s ease,
+    border-radius 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease,
+    transform 0.22s cubic-bezier(.2,.8,.2,1);
   touch-action: none;
 }
 
@@ -5383,7 +5404,7 @@ defineExpose({
 }
 
 .pixel-trend-widget.maximized {
-  border-radius: 18px;
+  border-radius: 14px;
 }
 
 .pixel-trend-widget.minimized {
@@ -5395,12 +5416,12 @@ defineExpose({
 .pixel-widget-header {
   position: relative;
   z-index: 2;
-  min-height: 58px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 12px 14px 12px 18px;
+  gap: 10px;
+  padding: 7px 10px 7px 14px;
   border-bottom: 1px solid rgba(180, 205, 222, 0.12);
   background: rgba(7, 15, 22, 0.28);
   flex-shrink: 0;
@@ -5417,9 +5438,9 @@ defineExpose({
 .pixel-widget-title {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   min-width: 0;
-  font-size: 0.95rem;
+  font-size: 0.84rem;
   font-weight: 800;
   letter-spacing: 0.01em;
 }
@@ -5428,22 +5449,26 @@ defineExpose({
 .pixel-widget-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-shrink: 0;
 }
 .pixel-widget-action {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(180, 205, 222, 0.12);
-  border-radius: 9px;
+  border-radius: 8px;
   color: #d7edf8;
   background: rgba(255, 255, 255, 0.05);
   cursor: pointer;
   transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
   touch-action: manipulation;
+}
+.pixel-widget-action svg {
+  width: 14px;
+  height: 14px;
 }
 .pixel-widget-action:hover {
   transform: translateY(-1px);
@@ -5462,8 +5487,8 @@ defineExpose({
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 7px;
+  padding: 8px;
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
@@ -5502,7 +5527,7 @@ defineExpose({
 .pixel-widget-error,
 .pixel-widget-empty {
   flex: 1;
-  min-height: 280px;
+  min-height: 200px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5558,7 +5583,7 @@ defineExpose({
 }
 .pixel-loading-chart {
   flex: 1;
-  min-height: 260px;
+  min-height: 190px;
   display: grid;
   grid-template-columns: repeat(10, minmax(16px, 1fr));
   align-items: end;
@@ -5597,42 +5622,47 @@ defineExpose({
 }
 .pixel-resize-n,
 .pixel-resize-s {
-  left: 18px;
-  right: 18px;
-  height: 10px;
+  left: 14px;
+  right: 14px;
+  height: 14px;
   cursor: ns-resize;
 }
-.pixel-resize-n { top: -4px; }
-.pixel-resize-s { bottom: -4px; }
+.pixel-resize-n { top: -6px; }
+.pixel-resize-s { bottom: -6px; }
 .pixel-resize-e,
 .pixel-resize-w {
-  top: 18px;
-  bottom: 18px;
-  width: 10px;
+  top: 14px;
+  bottom: 14px;
+  width: 14px;
   cursor: ew-resize;
 }
-.pixel-resize-e { right: -4px; }
-.pixel-resize-w { left: -4px; }
+.pixel-resize-e { right: -6px; }
+.pixel-resize-w { left: -6px; }
 .pixel-resize-ne,
 .pixel-resize-nw,
 .pixel-resize-se,
 .pixel-resize-sw {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
 }
-.pixel-resize-ne { top: -4px; right: -4px; cursor: nesw-resize; }
-.pixel-resize-nw { top: -4px; left: -4px; cursor: nwse-resize; }
-.pixel-resize-se { bottom: -4px; right: -4px; cursor: nwse-resize; }
-.pixel-resize-sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+.pixel-resize-ne { top: -7px; right: -7px; cursor: nesw-resize; }
+.pixel-resize-nw { top: -7px; left: -7px; cursor: nwse-resize; }
+.pixel-resize-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+.pixel-resize-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
 
 .pixel-widget-fade-enter-active,
 .pixel-widget-fade-leave-active {
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  transition: opacity 0.22s ease, transform 0.24s cubic-bezier(.2,.8,.2,1);
 }
 .pixel-widget-fade-enter-from,
 .pixel-widget-fade-leave-to {
   opacity: 0;
-  transform: translateX(18px) scale(0.97);
+  transform: translateY(-8px) scale(0.94);
+}
+.pixel-widget-fade-enter-to,
+.pixel-widget-fade-leave-from {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 @media (max-width: 768px) {

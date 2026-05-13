@@ -181,6 +181,18 @@ const particles = Array.from({ length: 18 }, (_, i) => ({
   size: 2 + Math.random() * 4, op: 0.08 + Math.random() * 0.22,
 }))
 
+const overviewStats = [
+  { icon: '🌾', value: '150 days', label: 'Rabi wheat season' },
+  { icon: '💧', value: '5 layers', label: 'Irrigation indicators' },
+  { icon: '📍', value: 'Udham Singh Nagar', label: 'Study region' },
+]
+
+const footerTech = [
+  { icon: '🛰️', name: 'Satellite', role: 'Raster crop indicators' },
+  { icon: '🗺️', name: 'Leaflet', role: 'Interactive map layers' },
+  { icon: '📈', name: 'Chart.js', role: 'Time-series charts' },
+]
+
 </script>
 
 <style scoped>

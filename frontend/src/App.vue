@@ -82,7 +82,7 @@
           <div class="sidebar-content">
             <p class="sidebar-section-label">Map Layers</p>
             <div v-for="layer in layerDefs" :key="layer.key">
-              <div class="layer-card" :class="{ active: layers[layer.key] }" @click="layers[layer.key] = !layers[layer.key]">
+              <div class="layer-card" :class="{ active: layers[layer.key] }" @click="toggleMapLayer(layer.key)">
                 <div class="layer-left">
                   <span class="layer-ico">{{ layer.icon }}</span>
                   <div>
@@ -126,6 +126,7 @@
             :slot="currentslot"
             :opacity="Number(opacity)"
             :selectedDate="selectedCalendarDate"
+            :selectedLayer="selectedMapLayer"
             :weatherSummary="mapWeatherSummary"
             :isDark="isDark"
             :chartVisible="chartVisible"
@@ -269,6 +270,7 @@ function showFAQs()      { currentView.value = 'faqs' }
 
 // ── Layer state — now includes ETc ────────────────────────────────────────
 const layers     = reactive({ savi: false, kc: false, etc: false,cwr: false, iwr: false})
+const selectedMapLayer = ref(null)
 const forecastDays = ref('today')
 const opacity    = ref(1.0)
 const chartVisible = ref(false)
@@ -284,6 +286,19 @@ const selectedCalendarDate  = ref(null)
 const currentslot           = ref('today')
 const API_BASE              = 'http://localhost:8000'
 const todayISO = formatLocalISO(new Date())
+
+function toggleMapLayer(key) {
+  layers[key] = !layers[key]
+
+  if (layers[key]) {
+    selectedMapLayer.value = key
+    return
+  }
+
+  if (selectedMapLayer.value === key) {
+    selectedMapLayer.value = Object.keys(layers).find(layerKey => layers[layerKey]) || null
+  }
+}
 
 // ── Calendar filter state ─────────────────────────────────────────────────
 const calFilterSeason = ref(null)   // e.g. '2024-25' or null = all
