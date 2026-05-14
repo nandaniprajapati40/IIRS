@@ -1,32 +1,38 @@
 <!-- MapView.vue -->
-
 <template>
   <div class="map-container">
     <div id="map" ref="mapEl" class="map"></div>
 
-    <!-- Map Style Dropdown -->
-    <div class="map-style-dropdown">
-      <button class="dropdown-toggle" @click="toggleStyleDropdown">
-        <span class="style-icon">{{ currentStyle.icon }}</span>
-        <span class="style-name">{{ currentMapStyle }}</span>
-        <span class="dropdown-arrow">▼</span>
+    <div
+      class="basemap-switcher-control"
+      role="radiogroup"
+      aria-label="Basemap selector"
+      @pointerdown.stop
+      @click.stop
+      @dblclick.stop
+    >
+      <button
+        v-for="style in mapStyles"
+        :key="style.name"
+        type="button"
+        class="basemap-card"
+        :class="{ active: currentMapStyle === style.name }"
+        :aria-pressed="currentMapStyle === style.name"
+        :title="`Switch to ${style.name}`"
+        @click="selectMapStyle(style.name)"
+      >
+        <span class="basemap-card-thumb">
+          <img :src="style.thumbnail" :alt="`${style.name} preview`" loading="lazy" />
+        </span>
+        <span class="basemap-card-name">{{ style.name }}</span>
       </button>
-
-      <div class="dropdown-menu" v-show="isStyleDropdownOpen">
-        <button v-for="style in mapStyles" :key="style.name" class="dropdown-item"
-          :class="{ active: currentMapStyle === style.name }" @click="selectMapStyle(style.name)">
-          <span class="style-icon">{{ style.icon }}</span>
-          <span class="style-name">{{ style.name }}</span>
-          <span class="check-mark" v-if="currentMapStyle === style.name">✓</span>
-        </button>
-      </div>
     </div>
+
     <!-- Info Panel (shown on map click / My Location) -->
-    <div class="info-panel" v-if="pointData && showInfoPanel" :class="{ 'light': !isDarkMode }">
+    <!-- <div class="info-panel" v-if="pointData && showInfoPanel" :class="{ 'light': !isDarkMode }">
       <button class="close-btn" type="button" @click="showInfoPanel = false" aria-label="Close info panel">×</button>
       <h3>📍 Selected Point</h3>
 
-      <!-- Sentinel acquisition date + coordinates -->
       <div class="meta-row">
         <span class="meta-icon">🛰️</span>
         <span class="meta-label">Date</span>
@@ -43,17 +49,16 @@
       </div>
       
 
-      <!-- No active layer hint -->
+
       <p v-if="activeLayers.length === 0" class="nodata-hint">
         Enable a layer in the sidebar to see values.
       </p>
 
-      <!-- Per-layer value cards -->
       <div v-for="layer in activeLayers" :key="layer.name" class="value-section">
         <h4>{{ layer.displayName }}</h4>
 
         <div class="forecast-grid">
-          <!-- Observed (satellite pixel / current) -->
+      
           <div class="fc-item" :class="{ 'fc-item--active': selectedWindow === null && layer.name === 'kc' }"
                @click="layer.name === 'kc' && selectForecastWindow(null)">
             <span class="fc-label observed-label">Today</span>
@@ -65,7 +70,7 @@
             <span v-else class="nodata-chip">No data</span>
           </div>
 
-          <!-- 5/10/15-day forecast — Kc and SAVI (derived) -->
+         
           <template v-if="forecastData && (layer.name === 'kc' || layer.name === 'savi')">
             <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]"
                  :class="{ 'fc-item--active': selectedWindow === w[0] && layer.name === 'kc' }"
@@ -85,7 +90,6 @@
             </div>
           </template>
 
-          <!-- 5/10/15-day forecast — CWR / IWR (cumulative totals mm) -->
           <template v-if="forecastData && (layer.name === 'cwr' || layer.name === 'iwr')">
             <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]">
               <span class="fc-label">{{ w[1] }} total</span>
@@ -99,7 +103,7 @@
             </div>
           </template>
 
-          <!-- 5/10/15-day forecast — ETc (daily average mm/day) -->
+      
           <template v-if="forecastData && layer.name === 'etc'">
             <div class="fc-item" v-for="w in [['5day','5D'], ['10day','10D'], ['15day','15D']]" :key="w[0]">
               <span class="fc-label">{{ w[1] }} avg</span>
@@ -114,12 +118,9 @@
           </template>
         </div>
       </div>
-
-      <!-- Forecast loading indicator -->
       <p v-if="isForecastLoading" class="loading-hint">⏳ Loading forecast…</p>
-    </div>
+    </div> -->
 
-    <!-- Location Button -->
     <button
       class="location-btn"
       @click="getCurrentLocation"
@@ -136,6 +137,69 @@
       </span>
       <span class="location-spinner" v-if="isLocating" aria-hidden="true"></span>
     </button>
+
+    <!-- Selected Point Icon (Top of bottom-left group) -->
+    <button
+      class="selected-point-icon"
+      @click="showInfoPanel = !showInfoPanel"
+      :title="showInfoPanel ? 'Hide selected point panel' : 'Show selected point panel'"
+      :aria-label="showInfoPanel ? 'Hide selected point panel' : 'Show selected point panel'"
+    >
+      <span class="point-icon" aria-hidden="true">📍</span>
+    </button>
+
+    <!-- Unified Pixel Popup (hover follows cursor, click pins the same card) -->
+    <div
+      class="pixel-value-popup"
+      v-if="showUnifiedPixelPopup"
+      :class="{ pinned: unifiedPopupPinned, light: !isDarkMode }"
+      :style="{
+        left: unifiedPopupPosition.x + 'px',
+        top: unifiedPopupPosition.y + 'px'
+      }"
+    >
+      <button
+        v-if="unifiedPopupPinned"
+        class="pixel-popup-close"
+        type="button"
+        @click="closeUnifiedPixelPopup"
+        aria-label="Close pixel popup"
+      >×</button>
+      <div class="pixel-popup-head">
+        <span class="pixel-popup-kicker">{{ unifiedPopupPinned ? 'Selected pixel' : 'Pixel preview' }}</span>
+        <span v-if="unifiedPopupDate" class="pixel-popup-date">{{ unifiedPopupDate }}</span>
+      </div>
+
+      <div v-if="unifiedPopupLoading" class="pixel-popup-loading">
+        Fetching pixel values...
+      </div>
+
+      <div v-else-if="unifiedPopupRows.length > 0" class="pixel-popup-table">
+        <div class="pixel-popup-table-head">
+          <span>Layer</span>
+          <span>Today</span>
+          <span>5 Day</span>
+          <span>10 Day</span>
+          <span>15 Day</span>
+        </div>
+        <div v-for="row in unifiedPopupRows" :key="row.layer" class="pixel-popup-row">
+          <span class="pixel-popup-layer">{{ row.label }}</span>
+          <span class="pixel-popup-value">{{ row.today }}</span>
+          <span class="pixel-popup-value">{{ row.five }}</span>
+          <span class="pixel-popup-value">{{ row.ten }}</span>
+          <span class="pixel-popup-value">{{ row.fifteen }}</span>
+        </div>
+      </div>
+
+      <div v-else class="pixel-popup-empty">
+        No layer data here
+      </div>
+    </div>
+
+    <!-- Live Mouse Coordinate Display -->
+    <div class="mouse-coordinate-display" v-if="hoverCoords">
+      {{ hoverCoords.lng }}, {{ hoverCoords.lat }}
+    </div>
 
     <!-- Chart Panel -->
     <div class="chart-panel" v-if="props.chartVisible">
@@ -358,8 +422,15 @@ let pixelTimeSeriesSequence   = 0
 let pixelTimeSeriesController = null
 let pointDataRequestId        = 0
 let pointDataController       = null
+let hoverPointRequestId       = 0
+let hoverPointController      = null
 let mapClickRequestId         = 0
 let pixelWidgetPointerState   = null
+let hoverFrame                = null
+let hoverFetchTimer           = null
+let lastHoverFetchAt          = 0
+let pendingHoverPoint         = null
+let pixelWidgetContainerObserver = null
 
 const PIXEL_WIDGET_GUTTER = 12
 const PIXEL_WIDGET_MIN_WIDTH = 320
@@ -367,6 +438,11 @@ const PIXEL_WIDGET_MIN_HEIGHT = 260
 const PIXEL_WIDGET_DEFAULT_WIDTH = 500
 const PIXEL_WIDGET_DEFAULT_HEIGHT = 360
 const PIXEL_WIDGET_MINIMIZED_HEIGHT = 44
+const HOVER_FETCH_INTERVAL_MS = 180
+const POINT_CACHE_LIMIT = 220
+const PIXEL_TS_CACHE_LIMIT = 40
+const pointDataCache = new Map()
+const pixelTimeSeriesCache = new Map()
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
@@ -446,7 +522,12 @@ const pixelWidgetStyle = computed(() => {
 
 function schedulePixelChartResize() {
   nextTick(() => {
-    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+    requestAnimationFrame(() => {
+      clampPixelWidgetFrame()
+      window.dispatchEvent(new CustomEvent('resize', {
+        detail: { pixelWidgetSynthetic: true },
+      }))
+    })
   })
 }
 
@@ -581,7 +662,8 @@ function stopPixelWidgetPointer() {
   schedulePixelChartResize()
 }
 
-function handlePixelWidgetViewportResize() {
+function handlePixelWidgetViewportResize(event) {
+  if (event?.detail?.pixelWidgetSynthetic) return
   if (!pixelWidgetFrame.initialized) return
   clampPixelWidgetFrame()
   schedulePixelChartResize()
@@ -594,10 +676,44 @@ function abortPixelTimeSeriesRequest() {
   }
 }
 
-async function fetchPixelTimeSeries(lat, lon) {
+function boundedCacheSet(cache, key, value, limit) {
+  if (cache.has(key)) cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > limit) {
+    const oldestKey = cache.keys().next().value
+    cache.delete(oldestKey)
+  }
+}
+
+function pointCacheKey(lat, lon, slot = props.slot) {
+  return `${slot || 'today'}:${Number(lat).toFixed(6)}:${Number(lon).toFixed(6)}`
+}
+
+function pixelTimeSeriesQueryKey(lat, lon) {
+  return `query:${Number(lat).toFixed(6)}:${Number(lon).toFixed(6)}`
+}
+
+function preparePixelWidgetLoading(lat, lon) {
+  pixelTimeSeriesRequestId = Date.now() * 1000 + (++pixelTimeSeriesSequence)
+  abortPixelTimeSeriesRequest()
+  ensurePixelWidgetFrame()
+  selectedPixelLocation.value = { lat: Number(lat), lon: Number(lon) }
+  pixelWidgetLayer.value = props.selectedLayer || activeLayers.value[0]?.name || null
+  pixelWidgetMode.value = 'cumulative'
+  showPixelWidget.value = true
+  pixelWidgetMinimized.value = false
+  pixelTimeSeriesLoading.value = true
+  pixelTimeSeriesError.value = null
+  pixelTimeSeries.value = null
+}
+
+async function fetchPixelTimeSeries(lat, lon, { pixelId = null } = {}) {
   const requestId = Date.now() * 1000 + (++pixelTimeSeriesSequence)
   pixelTimeSeriesRequestId = requestId
   abortPixelTimeSeriesRequest()
+  const queryKey = pixelTimeSeriesQueryKey(lat, lon)
+  const pixelKey = pixelId ? `pixel:${pixelId}` : null
+  const cached = (pixelKey && pixelTimeSeriesCache.get(pixelKey)) || pixelTimeSeriesCache.get(queryKey)
 
   const controller = new AbortController()
   pixelTimeSeriesController = controller
@@ -605,16 +721,27 @@ async function fetchPixelTimeSeries(lat, lon) {
   selectedPixelLocation.value = { lat: Number(lat), lon: Number(lon) }
   showPixelWidget.value = true
   pixelWidgetMinimized.value = false
-  pixelTimeSeriesLoading.value = true
+  pixelTimeSeriesLoading.value = !cached
   pixelTimeSeriesError.value   = null
-  pixelTimeSeries.value        = null
+  pixelTimeSeries.value        = cached || null
+
+  if (cached) {
+    pixelTimeSeriesController = null
+    return cached
+  }
  
   try {
     pixelWidgetLayer.value = props.selectedLayer || activeLayers.value[0]?.name || null
     pixelWidgetMode.value = 'cumulative'
 
+    const params = new URLSearchParams({
+      lat: String(lat),
+      lon: String(lon),
+      request_group: pixelRequestGroup,
+      request_id: String(requestId),
+    })
     const res = await fetch(
-      `${API_BASE}/api/pixel-timeseries?lat=${lat}&lon=${lon}&request_group=${encodeURIComponent(pixelRequestGroup)}&request_id=${requestId}`,
+      `${API_BASE}/api/pixel-timeseries?${params.toString()}`,
       { signal: controller.signal, cache: 'no-store' }
     )
     if (!res.ok) {
@@ -624,7 +751,12 @@ async function fetchPixelTimeSeries(lat, lon) {
     const data = await res.json()
     if (requestId === pixelTimeSeriesRequestId) {
       pixelTimeSeries.value = data
+      boundedCacheSet(pixelTimeSeriesCache, queryKey, data, PIXEL_TS_CACHE_LIMIT)
+      if (data?.pixel_id) {
+        boundedCacheSet(pixelTimeSeriesCache, `pixel:${data.pixel_id}`, data, PIXEL_TS_CACHE_LIMIT)
+      }
     }
+    return data
   } catch (err) {
     if (err.name === 'AbortError') return
     console.error('[pixel-ts] fetch error:', err)
@@ -639,6 +771,7 @@ async function fetchPixelTimeSeries(lat, lon) {
       }
     }
   }
+  return null
 }
 
 function closePixelWidget() {
@@ -725,8 +858,11 @@ watch(() => props.selectedLayer, (layer) => {
 const mapEl = ref(null)
 let map
 let baseLayer = null
+let retiringBaseLayer = null
+let basemapTransitionFrame = null
 let boundaryLayer = null
 let wmsLayers = {}
+let gisScaleControl = null
 const pointData = ref(null)
 const forecastData = ref(null)
 
@@ -743,12 +879,19 @@ function calculateSaviFromKc(kcValue) {
 const isForecastLoading = ref(false)
 const boundaryLoaded = ref(false)
 const currentMapStyle = ref('Satellite')
-const isStyleDropdownOpen = ref(false)
 // isDarkMode is now derived from the isDark prop passed by App.vue
 const isDarkMode = computed(() => props.isDark)
 const isLocating = ref(false)
 const locationError = ref(null)
 let userLocationMarker = null
+
+// Unified pixel popup state
+const hoverPointData = ref(null)
+const hoverCoords = ref(null)
+const unifiedPopupPinned = ref(false)
+const unifiedPopupLoading = ref(false)
+const unifiedPopupPosition = ref({ x: 16, y: 16 })
+const highestZIndex = ref(2000)
 
 // Forecast window state: null = observed, '5day' | '10day' | '15day' = forecast
 const selectedWindow = ref(null)
@@ -757,24 +900,29 @@ let kcForecastLayer = null
 
 // Map style options
 const mapStyles = [
-
   {
     name: 'Satellite',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     attribution: '© Esri',
-    // icon: 'Satellite'
+    thumbnail: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/8/8'
   },
   {
-    name: 'street',
+    name: 'Street Map',
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: '© OpenStreetMap',
-    // icon: 'Field'
+    thumbnail: 'https://a.tile.openstreetmap.org/4/8/8.png'
   },
   {
-    name: 'Focus',
+    name: 'Terrain',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri',
+    thumbnail: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/8/8'
+  },
+  {
+    name: 'Dark Map',
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     attribution: '© CartoDB',
-    // icon: 'Focus'
+    thumbnail: 'https://b.basemaps.cartocdn.com/dark_all/4/8/8.png'
   },
 ]
 
@@ -862,7 +1010,63 @@ function refreshKcForecastLayer() {
   kcForecastLayer.addTo(map)
 }
 
-// Fetch point data
+function normalizePointResponse(data) {
+  if (!data) return null
+  return {
+    lat: Number(data.lat),
+    lon: Number(data.lon),
+    queryLat: Number(data.query_lat ?? data.queryLat ?? data.lat),
+    queryLon: Number(data.query_lon ?? data.queryLon ?? data.lon),
+    pixelId: data.pixel_id || data.pixelId || null,
+    row: data.row ?? null,
+    col: data.col ?? null,
+    acquisition_date: data.acquisition_date || 'N/A',
+    values: data.values || {},
+    forecast: data.forecast || {},
+    slot: data.slot || props.slot || 'today',
+  }
+}
+
+function setSelectedPointData(data) {
+  const normalized = normalizePointResponse(data)
+  if (!normalized) {
+    pointData.value = null
+    forecastData.value = {}
+    return null
+  }
+  pointData.value = normalized
+  forecastData.value = normalized.forecast || {}
+  return normalized
+}
+
+async function requestPointData(lat, lon, { signal, slot = props.slot } = {}) {
+  const key = pointCacheKey(lat, lon, slot)
+  const cached = pointDataCache.get(key)
+  if (cached) return cached
+
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    slot: slot || 'today',
+  })
+  const pointRes = await fetch(
+    `${API_BASE}/api/point?${params.toString()}`,
+    { signal, cache: 'no-store' }
+  )
+  if (!pointRes.ok) {
+    const err = await pointRes.json().catch(() => ({}))
+    throw new Error(err?.detail || `HTTP ${pointRes.status}`)
+  }
+  const data = await pointRes.json()
+  const normalized = normalizePointResponse(data)
+  boundedCacheSet(pointDataCache, key, normalized, POINT_CACHE_LIMIT)
+  if (normalized?.pixelId) {
+    boundedCacheSet(pointDataCache, `${slot || 'today'}:pixel:${normalized.pixelId}`, normalized, POINT_CACHE_LIMIT)
+  }
+  return normalized
+}
+
+// Fetch selected point data for click/location workflows.
 async function fetchPointData(lat, lon) {
   const requestId = ++pointDataRequestId
   if (pointDataController) {
@@ -872,33 +1076,20 @@ async function fetchPointData(lat, lon) {
   pointDataController = controller
 
   try {
-    const pointRes = await fetch(
-      `${API_BASE}/api/point?lat=${lat}&lon=${lon}&slot=${props.slot}`,
-      { signal: controller.signal, cache: 'no-store' }
-    )
-    if (!pointRes.ok) {
-      const err = await pointRes.json().catch(() => ({}))
-      throw new Error(err?.detail || `HTTP ${pointRes.status}`)
-    }
-    const data = await pointRes.json()
-
+    const data = await requestPointData(lat, lon, { signal: controller.signal })
     if (requestId === pointDataRequestId) {
-      pointData.value = {
-        lat: Number(data.lat),
-        lon: Number(data.lon),
-        acquisition_date: data.acquisition_date || 'N/A',
-        values: data.values || {},
-      }
-      forecastData.value = data.forecast || {}
+      setSelectedPointData(data)
+      return data
     }
-    return requestId === pointDataRequestId
+    return null
   } catch (err) {
-    if (err.name === 'AbortError') return false
+    if (err.name === 'AbortError') return null
     console.error("Point fetch error:", err)
     if (requestId === pointDataRequestId) {
       pointData.value = null
+      forecastData.value = {}
     }
-    return false
+    return null
   } finally {
     if (pointDataController === controller) {
       pointDataController = null
@@ -4178,11 +4369,6 @@ const colorMaps = {
   { value:       15, color: '#69F0AE' },
   ],
 }
-// Current style object
-const currentStyle = computed(() => {
-  return mapStyles.find(s => s.name === currentMapStyle.value) || mapStyles[0]
-})
-
 // Computed active layers based on props
 const activeLayers = computed(() => {
   return Object.keys(props.layers)
@@ -4233,11 +4419,6 @@ function format(val) {
   return typeof val === 'number' ? val.toFixed(3) : "-"
 }
 
-// Toggle dropdown
-function toggleStyleDropdown() {
-  isStyleDropdownOpen.value = !isStyleDropdownOpen.value
-}
-
 // Select forecast window for Kc layer
 function selectForecastWindow(window) {
   selectedWindow.value = selectedWindow.value === window ? null : window
@@ -4245,32 +4426,35 @@ function selectForecastWindow(window) {
 
 // Select map style
 function selectMapStyle(styleName) {
+  if (currentMapStyle.value === styleName) return
   currentMapStyle.value = styleName
-  isStyleDropdownOpen.value = false
   changeMapStyle(styleName)
-}
-
-// Close dropdown when clicking outside
-function handleClickOutside(event) {
-  const dropdown = document.querySelector('.map-style-dropdown')
-  if (dropdown && !dropdown.contains(event.target)) {
-    isStyleDropdownOpen.value = false
-  }
 }
 
 // Change map base style
 function changeMapStyle(styleName) {
+  if (!map) return
   const style = mapStyles.find(s => s.name === styleName)
   if (!style) return
 
-  if (baseLayer) {
-    map.removeLayer(baseLayer)
+  if (basemapTransitionFrame) {
+    cancelAnimationFrame(basemapTransitionFrame)
+    basemapTransitionFrame = null
   }
 
-  baseLayer = L.tileLayer(style.url, {
+  if (retiringBaseLayer && map.hasLayer(retiringBaseLayer)) {
+    map.removeLayer(retiringBaseLayer)
+  }
+  retiringBaseLayer = baseLayer && map.hasLayer(baseLayer) ? baseLayer : null
+  if (retiringBaseLayer) retiringBaseLayer.setOpacity(1)
+
+  const nextBaseLayer = L.tileLayer(style.url, {
     attribution: style.attribution,
     maxZoom: 19
-  }).addTo(map)
+  })
+  nextBaseLayer.setOpacity(retiringBaseLayer ? 0 : 1)
+  nextBaseLayer.addTo(map)
+  baseLayer = nextBaseLayer
 
   if (boundaryLayer) {
     boundaryLayer.bringToFront()
@@ -4281,6 +4465,27 @@ function changeMapStyle(styleName) {
       wmsLayers[key].bringToFront()
     }
   })
+
+  if (!retiringBaseLayer) return
+
+  const duration = 240
+  const start = performance.now()
+  const fadeBaseLayer = (now) => {
+    const progress = Math.min((now - start) / duration, 1)
+    nextBaseLayer.setOpacity(progress)
+
+    if (progress < 1) {
+      basemapTransitionFrame = requestAnimationFrame(fadeBaseLayer)
+      return
+    }
+
+    if (retiringBaseLayer && map.hasLayer(retiringBaseLayer)) {
+      map.removeLayer(retiringBaseLayer)
+    }
+    retiringBaseLayer = null
+    basemapTransitionFrame = null
+  }
+  basemapTransitionFrame = requestAnimationFrame(fadeBaseLayer)
 }
 
 // Load boundary
@@ -4313,7 +4518,58 @@ async function loadBoundary() {
 
 // Unit label per layer (observed / daily values)
 function layerUnit(name) {
-  return { savi: '', kc: '', cwr: 'mm', iwr: 'mm', etc: 'mm/day' }[name] ?? ''
+  return { savi: '', kc: '', cwr: 'mm', iwr: 'mm', etc: 'mm' }[name] ?? ''
+}
+
+function formatPopupValue(value, unit = '') {
+  const numeric = Number(value)
+  if (value == null || !Number.isFinite(numeric)) return '--'
+  const suffix = unit ? ` ${unit}` : ''
+  return `${numeric.toFixed(3)}${suffix}`
+}
+
+function getPopupForecastValue(layerName, windowKey, data) {
+  if (!data?.forecast) return null
+  if (layerName === 'savi' && data.forecast?.kc?.[windowKey] != null) {
+    return calculateSaviFromKc(data.forecast.kc[windowKey])
+  }
+  return data.forecast?.[layerName]?.[windowKey] ?? null
+}
+
+const unifiedPopupData = computed(() => unifiedPopupPinned.value ? pointData.value : hoverPointData.value)
+
+const unifiedPopupDate = computed(() => {
+  const data = unifiedPopupData.value
+  return data?.acquisition_date || slotToDateMap[props.slot] || ''
+})
+
+const unifiedPopupRows = computed(() => {
+  const data = unifiedPopupData.value
+  if (!data) return []
+
+  return activeLayers.value
+    .map(layer => {
+      const unit = layerUnit(layer.name)
+      return {
+        layer: layer.name,
+        label: layer.displayName,
+        today: formatPopupValue(data.values?.[layer.name], unit),
+        five: formatPopupValue(getPopupForecastValue(layer.name, '5day', data), unit),
+        ten: formatPopupValue(getPopupForecastValue(layer.name, '10day', data), unit),
+        fifteen: formatPopupValue(getPopupForecastValue(layer.name, '15day', data), unit),
+      }
+    })
+    .filter(row => [row.today, row.five, row.ten, row.fifteen].some(value => value !== '--'))
+})
+
+const showUnifiedPixelPopup = computed(() => {
+  if (unifiedPopupPinned.value) return true
+  return Boolean(hoverPointData.value && unifiedPopupRows.value.length > 0)
+})
+
+function closeUnifiedPixelPopup() {
+  unifiedPopupPinned.value = false
+  unifiedPopupLoading.value = false
 }
 
 // Check if point is within boundary
@@ -4413,58 +4669,260 @@ async function getCurrentLocation() {
 async function onMapClick(e) {
   const clickId = ++mapClickRequestId
   const { lat, lng } = e.latlng
-  fetchPixelTimeSeries(lat, lng)
- 
-  // ── Open popup immediately with loading state ──────────────────────────
-  const popup = L.popup({
-    className: `custom-value-popup ${!isDarkMode.value ? 'light' : ''}`,
-    closeButton: false,
-    offset: [0, -10],
-    autoPan: false,
-  })
-    .setLatLng([lat, lng])
-    .setContent('<div class="popup-loading"><span>⏳</span> Fetching…</div>')
-    .openOn(map)
- 
-  // ── Fetch point data (existing /api/point call) ────────────────────────
-  const hasFreshPointData = await fetchPointData(lat, lng)
-  if (clickId !== mapClickRequestId) return
-  emit('location-selected', { lat, lon: lng })
- 
-  // ── Build popup content ───────────────────────────────────────────────
-  if (hasFreshPointData && pointData.value) {
-    const activeWithData = activeLayers.value.filter(
-      l => pointData.value.values?.[l.name] != null
-    )
- 
-    if (activeWithData.length > 0) {
-      let content = `<div class="popup-content-multi">`
- 
-      activeWithData.forEach(layer => {
-        const val = pointData.value.values[layer.name]
-        const unit = layerUnit(layer.name)
-        content += `
-          <div class="popup-row">
-            <span class="value-layer">${layer.displayName}:</span>
-            <span class="value-num">${val.toFixed(3)}</span>
-            <span class="value-unit">${unit}</span>
-          </div>`
-      })
- 
-      content += `</div>`
-      popup.setContent(content)
- 
-    } else {
-      popup.setContent(
-        '<div class="popup-content no-data">No layer data here</div>'
-      )
-      setTimeout(() => {
-        if (map.hasLayer(popup)) map.closePopup(popup)
-      }, 2000)
+
+  unifiedPopupPinned.value = true
+  unifiedPopupLoading.value = true
+  hoverPointData.value = null
+  if (e.containerPoint) {
+    unifiedPopupPosition.value = {
+      x: e.containerPoint.x + 14,
+      y: e.containerPoint.y + 14,
     }
-  } else {
-    map.closePopup(popup)
   }
+ 
+  // ── Fetch exact backend raster pixel, then graph that pixel center ─────
+  const selectedPoint = await fetchPointData(lat, lng)
+  if (clickId !== mapClickRequestId) return
+  unifiedPopupLoading.value = false
+  emit('location-selected', { lat, lon: lng })
+  if (selectedPoint?.lat && selectedPoint?.lon) {
+    fetchPixelTimeSeries(selectedPoint.lat, selectedPoint.lon, { pixelId: selectedPoint.pixelId })
+  } else {
+    fetchPixelTimeSeries(lat, lng)
+  }
+ 
+  // ── Show info panel for new point ────────────────────────
+  showInfoPanel.value = true
+ 
+  if (!selectedPoint && clickId === mapClickRequestId) {
+    unifiedPopupLoading.value = false
+  }
+}
+
+function activeHoverLayer() {
+  const preferred = props.selectedLayer && props.layers[props.selectedLayer]
+    ? layerConfigs[props.selectedLayer]
+    : null
+  return preferred || activeLayers.value[0] || null
+}
+
+function setHoverValueFromPoint(data) {
+  const layer = activeHoverLayer()
+  const hasActiveValue = Boolean(layer && data?.values?.[layer.name] != null)
+  const hasAnyActiveData = activeLayers.value.some(activeLayer => {
+    if (data?.values?.[activeLayer.name] != null) return true
+    return ['5day', '10day', '15day'].some(windowKey => getPopupForecastValue(activeLayer.name, windowKey, data) != null)
+  })
+
+  if (!hasActiveValue && !hasAnyActiveData) {
+    hoverPointData.value = null
+    return
+  }
+  hoverPointData.value = data
+}
+
+async function fetchHoverPointValue(lat, lon) {
+  if (unifiedPopupPinned.value) return
+  const layer = activeHoverLayer()
+  if (!layer) {
+    hoverPointData.value = null
+    return
+  }
+
+  const requestId = ++hoverPointRequestId
+  if (hoverPointController) {
+    hoverPointController.abort()
+  }
+  const controller = new AbortController()
+  hoverPointController = controller
+
+  try {
+    const data = await requestPointData(lat, lon, { signal: controller.signal })
+    if (requestId === hoverPointRequestId) {
+      setHoverValueFromPoint(data)
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError' && requestId === hoverPointRequestId) {
+      hoverPointData.value = null
+    }
+  } finally {
+    if (hoverPointController === controller) {
+      hoverPointController = null
+    }
+  }
+}
+
+function scheduleHoverFetch(lat, lng) {
+  if (unifiedPopupPinned.value) return
+  pendingHoverPoint = { lat, lng }
+  const elapsed = performance.now() - lastHoverFetchAt
+  const delay = Math.max(0, HOVER_FETCH_INTERVAL_MS - elapsed)
+
+  if (hoverFetchTimer) return
+
+  hoverFetchTimer = window.setTimeout(() => {
+    hoverFetchTimer = null
+    if (!pendingHoverPoint) return
+    const point = pendingHoverPoint
+    pendingHoverPoint = null
+    lastHoverFetchAt = performance.now()
+    fetchHoverPointValue(point.lat, point.lng)
+  }, delay)
+}
+
+function clearHoverState() {
+  hoverPointData.value = null
+  hoverCoords.value = null
+  pendingHoverPoint = null
+  if (hoverFrame) {
+    cancelAnimationFrame(hoverFrame)
+    hoverFrame = null
+  }
+  if (hoverFetchTimer) {
+    clearTimeout(hoverFetchTimer)
+    hoverFetchTimer = null
+  }
+  if (hoverPointController) {
+    hoverPointController.abort()
+    hoverPointController = null
+  }
+}
+
+// Handle map mouse move for lightweight hover value and coordinates display.
+function onMapMouseMove(e) {
+  if (unifiedPopupPinned.value) return
+  if (hoverFrame) cancelAnimationFrame(hoverFrame)
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = null
+    const { lat, lng } = e.latlng
+
+    if (e.originalEvent && mapEl.value) {
+      const rect = mapEl.value.getBoundingClientRect()
+      unifiedPopupPosition.value = {
+        x: e.originalEvent.clientX - rect.left,
+        y: e.originalEvent.clientY - rect.top
+      }
+    }
+
+    hoverCoords.value = { lat: lat.toFixed(4), lng: lng.toFixed(4) }
+    scheduleHoverFetch(lat, lng)
+  })
+}
+
+function formatGroupedNumber(value) {
+  return Math.round(value).toLocaleString('en-US')
+}
+
+function formatScaleDistance(meters) {
+  if (meters >= 1000) {
+    const km = meters / 1000
+    return `${km >= 10 ? formatGroupedNumber(km) : Number(km.toFixed(1)).toString()} km`
+  }
+
+  return `${formatGroupedNumber(meters)} m`
+}
+
+function getNiceScaleDistance(maxMeters) {
+  if (!Number.isFinite(maxMeters) || maxMeters <= 0) return 1
+
+  const exponent = Math.floor(Math.log10(maxMeters))
+  const power = Math.pow(10, exponent)
+  const fraction = maxMeters / power
+  const niceFractions = [1, 2, 4, 5, 8]
+  const niceFraction = niceFractions.reduce((best, current) => (
+    current <= fraction ? current : best
+  ), 1)
+
+  return niceFraction * power
+}
+
+function getScaleSegmentCount(totalMeters) {
+  const exponent = Math.floor(Math.log10(totalMeters))
+  const leading = Math.round(totalMeters / Math.pow(10, exponent))
+
+  if (leading === 1 || leading === 5) return 5
+  return 4
+}
+
+function buildGisScaleControl() {
+  const GisScaleControl = L.Control.extend({
+    options: {
+      position: 'bottomleft',
+      maxWidth: 220,
+      minWidth: 72
+    },
+
+    onAdd(controlMap) {
+      this._map = controlMap
+      this._container = L.DomUtil.create('div', 'leaflet-control gis-scale-control')
+      this._ratio = L.DomUtil.create('div', 'gis-scale-ratio', this._container)
+      this._labels = L.DomUtil.create('div', 'gis-scale-labels', this._container)
+      this._bar = L.DomUtil.create('div', 'gis-scale-bar', this._container)
+      L.DomEvent.disableClickPropagation(this._container)
+      L.DomEvent.disableScrollPropagation(this._container)
+      this._update = this._update.bind(this)
+      this._scheduleUpdate = this._scheduleUpdate.bind(this)
+      this._map.on('zoom zoomend move moveend resize', this._scheduleUpdate, this)
+      requestAnimationFrame(this._update)
+      return this._container
+    },
+
+    onRemove(controlMap) {
+      controlMap.off('zoom zoomend move moveend resize', this._scheduleUpdate, this)
+      if (this._pendingUpdate) cancelAnimationFrame(this._pendingUpdate)
+    },
+
+    _scheduleUpdate() {
+      if (this._pendingUpdate) return
+      this._pendingUpdate = requestAnimationFrame(() => {
+        this._pendingUpdate = null
+        this._update()
+      })
+    },
+
+    _update() {
+      if (!this._map || !this._container) return
+
+      const size = this._map.getSize()
+      if (!size.x || !size.y) return
+
+      const center = this._map.latLngToContainerPoint(this._map.getCenter())
+      const samplePixels = Math.min(120, Math.max(48, size.x * 0.18))
+      const leftPoint = L.point(center.x - samplePixels / 2, center.y)
+      const rightPoint = L.point(center.x + samplePixels / 2, center.y)
+      const leftLatLng = this._map.containerPointToLatLng(leftPoint)
+      const rightLatLng = this._map.containerPointToLatLng(rightPoint)
+      const metersPerPixel = this._map.distance(leftLatLng, rightLatLng) / samplePixels
+
+      if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) return
+
+      const maxWidth = Math.min(this.options.maxWidth, Math.max(this.options.minWidth, size.x * 0.36))
+      const totalMeters = getNiceScaleDistance(maxWidth * metersPerPixel)
+      const barWidth = totalMeters / metersPerPixel
+      const segmentCount = getScaleSegmentCount(totalMeters)
+      const ratioDenominator = metersPerPixel * (96 / 0.0254)
+
+      this._container.style.width = `${Math.round(barWidth)}px`
+      this._ratio.textContent = `1:${formatGroupedNumber(ratioDenominator)}`
+      this._labels.innerHTML = ''
+      this._bar.innerHTML = ''
+
+      for (let index = 0; index <= segmentCount; index += 1) {
+        const label = L.DomUtil.create('span', 'gis-scale-label', this._labels)
+        label.textContent = index === 0
+          ? '0'
+          : formatScaleDistance((totalMeters / segmentCount) * index)
+        label.style.left = `${(index / segmentCount) * 100}%`
+      }
+
+      for (let index = 0; index < segmentCount; index += 1) {
+        const segment = L.DomUtil.create('span', 'gis-scale-segment', this._bar)
+        segment.style.width = `${100 / segmentCount}%`
+      }
+    }
+  })
+
+  return new GisScaleControl()
 }
 
 // Apply filter method (exposed to parent)
@@ -4477,6 +4935,15 @@ function applyFilter(layer, filter) {
 }
 
 // Initialize map
+// onMounted(() => {
+//   map = L.map(mapEl.value, {
+//     center: [29.0, 79.4],
+//     zoom: 9,
+//     maxZoom: 22,
+//     minZoom: 5,
+//     zoomControl: true
+//   })
+
 onMounted(() => {
   map = L.map(mapEl.value, {
     center: [29.0, 79.4],
@@ -4485,6 +4952,9 @@ onMounted(() => {
     minZoom: 5,
     zoomControl: true
   })
+
+  gisScaleControl = buildGisScaleControl()
+  gisScaleControl.addTo(map)
 
   const defaultStyle = mapStyles[0]
   baseLayer = L.tileLayer(defaultStyle.url, {
@@ -4510,25 +4980,45 @@ onMounted(() => {
 
   loadBoundary()
   map.on('click', onMapClick)
-  document.addEventListener('click', handleClickOutside)
+  map.on('mousemove', onMapMouseMove)
+  map.on('mouseout', clearHoverState)
   window.addEventListener('resize', handlePixelWidgetViewportResize)
+  if (typeof ResizeObserver !== 'undefined') {
+    pixelWidgetContainerObserver = new ResizeObserver(handlePixelWidgetViewportResize)
+    const observedContainer = mapEl.value?.closest('.map-container') || mapEl.value
+    if (observedContainer) pixelWidgetContainerObserver.observe(observedContainer)
+  }
 })
 
 // Clean up
 onUnmounted(() => {
   stopPixelWidgetPointer()
   abortPixelTimeSeriesRequest()
+  if (basemapTransitionFrame) {
+    cancelAnimationFrame(basemapTransitionFrame)
+    basemapTransitionFrame = null
+  }
   if (pointDataController) {
     pointDataController.abort()
     pointDataController = null
   }
-  document.removeEventListener('click', handleClickOutside)
+  clearHoverState()
   window.removeEventListener('resize', handlePixelWidgetViewportResize)
+  if (pixelWidgetContainerObserver) {
+    pixelWidgetContainerObserver.disconnect()
+    pixelWidgetContainerObserver = null
+  }
   if (userLocationMarker && map) {
     map.removeLayer(userLocationMarker)
   }
   if (map) {
     map.off('click', onMapClick)
+    map.off('mousemove', onMapMouseMove)
+    map.off('mouseout', clearHoverState)
+    if (gisScaleControl) {
+      gisScaleControl.remove()
+      gisScaleControl = null
+    }
     map.remove()
   }
 })
@@ -4594,79 +5084,123 @@ defineExpose({
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
-/* ─── Map Style Dropdown ────────────────────────────────── */
-.map-style-dropdown {
+/* ─── Basemap Thumbnail Switcher ─────────────────────────── */
+.basemap-switcher-control {
   position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 1000;
-  width: 170px;
-}
-
-.dropdown-toggle {
-  width: 100%;
+  left: 50%;
+  bottom: 18px;
+  z-index: 1050;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(200, 210, 220, 0.1);
-  background: rgba(5, 8, 14, 0.9);
-  backdrop-filter: blur(14px);
-  color: #d0dbe5;
-  font-size: 0.82rem;
-  font-weight: 600;
+  max-width: calc(100% - 32px);
+  padding: 8px;
+  overflow-x: auto;
+  overflow-y: visible;
+  border: 1px solid rgba(214, 232, 246, 0.16);
+  border-radius: 12px;
+  background: rgba(5, 10, 17, 0.64);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px) saturate(1.18);
+  -webkit-backdrop-filter: blur(16px) saturate(1.18);
+  pointer-events: auto;
+  transform: translateX(-50%);
+  scrollbar-width: none;
+}
+.basemap-switcher-control::-webkit-scrollbar {
+  display: none;
+}
+
+.basemap-card {
+  position: relative;
+  width: 86px;
+  flex: 0 0 auto;
+  padding: 4px;
+  border: 1px solid rgba(226, 240, 252, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  opacity: 0.68;
+  filter: brightness(0.78) saturate(0.9);
   cursor: pointer;
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.4);
-  transition: all 0.2s ease;
+  outline: none;
+  transform-origin: center bottom;
+  transition:
+    transform 0.18s ease,
+    opacity 0.18s ease,
+    filter 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.dropdown-toggle:hover {
-  border-color: rgba(25, 199, 166, 0.5);
-  color: #f0f4f8;
-  transform: translateY(-1px);
-}
-
-.style-icon { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #8899aa; }
-.style-name  { flex: 1; }
-.dropdown-arrow { font-size: 0.7rem; opacity: 0.6; color: #8899aa; }
-
-.dropdown-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
+.basemap-card-thumb {
+  display: block;
   width: 100%;
-  background: rgba(5, 8, 14, 0.96);
-  border: 1px solid rgba(200, 210, 220, 0.1);
-  border-radius: 16px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  aspect-ratio: 16 / 9;
+  border-radius: 9px;
   overflow: hidden;
-  animation: dropdownFadeIn 0.18s ease;
+  background: #0c131c;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-@keyframes dropdownFadeIn {
-  from { opacity: 0; transform: translateY(-8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.dropdown-item {
+.basemap-card-thumb img {
+  display: block;
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: #8899aa;
-  font-size: 0.82rem;
-  font-weight: 500;
-  transition: all 0.18s;
-  text-align: left;
+  height: 100%;
+  object-fit: cover;
 }
-.dropdown-item:hover { background: rgba(47, 133, 90, 0.15); color: #f0f4f8; }
-.dropdown-item.active { background: rgba(47, 133, 90, 0.2); color: #3b9fd9; }
-.check-mark { margin-left: auto; font-weight: 700; color: #3b9fd9; }
+
+.basemap-card-name {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  left: 8px;
+  display: block;
+  min-width: 0;
+  padding: 2px 5px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.58);
+  color: #f7fbff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.basemap-card:hover,
+.basemap-card:focus-visible {
+  opacity: 1;
+  filter: brightness(1.1) saturate(1.08);
+  transform: scale(1.045);
+  border-color: rgba(157, 213, 255, 0.42);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
+}
+
+.basemap-card.active {
+  z-index: 1;
+  opacity: 1;
+  filter: brightness(1.08) saturate(1.08);
+  transform: scale(1.07);
+  border-color: rgba(92, 205, 255, 0.92);
+  background: rgba(3, 12, 22, 0.76);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.2),
+    0 0 22px rgba(59, 159, 217, 0.5),
+    0 12px 26px rgba(0, 0, 0, 0.38);
+}
+
+.basemap-card.active:hover,
+.basemap-card.active:focus-visible {
+  filter: brightness(1.16) saturate(1.12);
+  transform: scale(1.085);
+}
 
 /* ─── Info Panel ────────────────────────────────────────── */
 .info-panel {
@@ -4949,16 +5483,15 @@ defineExpose({
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: min(62vw, 900px);
-  height: min(72vh, 620px);
-  min-width: 520px;
-  min-height: 420px;
-  background: linear-gradient(180deg, rgba(10, 25, 36, 0.96), rgba(14, 32, 45, 0.94));
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(170, 199, 216, 0.14);
-  border-radius: 22px;
+  width: min(88vw, 980px);
+  height: min(78vh, 680px);
+  min-width: min(520px, calc(100vw - 24px));
+  min-height: min(420px, calc(100vh - 24px));
+  background: #ffffff;
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: 12px;
   z-index: 2000;
-  box-shadow: 0 24px 70px rgba(1, 10, 17, 0.28), 0 0 0 1px rgba(170, 199, 216, 0.04);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
   overflow: hidden;
   animation: fadeIn 0.22s ease;
 }
@@ -4970,8 +5503,11 @@ defineExpose({
 
 .chart-panel > .close-btn {
   z-index: 2001;
-  top: 14px;
-  right: 14px;
+  top: 10px;
+  right: 10px;
+  background: #f8fafc;
+  color: #475569;
+  border-color: rgba(100, 116, 139, 0.18);
 }
 
 /* ─── Weather Panel ───────────────────────────────────────── */
@@ -5142,19 +5678,22 @@ defineExpose({
 
 /* ─── Responsive ────────────────────────────────────────── */
 @media (max-width: 768px) {
-  .map-style-dropdown { top: 10px; right: 10px; width: 155px; }
+  .basemap-switcher-control { bottom: 12px; max-width: calc(100% - 20px); padding: 7px; gap: 7px; }
+  .basemap-card { width: 78px; }
+  .basemap-card-name { font-size: 0.58rem; right: 7px; left: 7px; }
   .info-panel { left: 10px; right: 10px; bottom: 10px; width: auto; max-width: none; max-height: 42vh; }
   .location-btn { right: 78px; bottom: 14px; width: 48px; height: 48px; }
-  .chart-panel { min-width: 90vw; width: 92vw; min-height: 55vh; }
+  .chart-panel { min-width: 0; width: calc(100vw - 20px); height: min(74vh, 620px); min-height: 360px; }
   .weather-panel { right: 10px; width: calc(100% - 20px); max-width: 340px; }
 }
 
 @media (max-width: 480px) {
-  .map-style-dropdown { width: 146px; }
-  .dropdown-toggle { padding: 8px 12px; }
+  .basemap-switcher-control { bottom: 10px; justify-content: flex-start; }
+  .basemap-card { width: 72px; padding: 3px; }
+  .basemap-card-name { bottom: 6px; padding: 2px 4px; font-size: 0.55rem; }
   .info-panel { padding: 14px 14px 12px; border-radius: 18px; }
   .location-btn { right: 66px; width: 46px; height: 46px; border-radius: 14px; }
-  .chart-panel { min-width: 94vw; width: 94vw; top: 48%; }
+  .chart-panel { width: calc(100vw - 16px); height: min(72vh, 560px); min-height: 320px; top: 48%; }
   .weather-panel { right: 8px; width: calc(100% - 16px); max-width: 290px; }
   .weather-grid { grid-template-columns: 1fr; }
 }
@@ -5234,119 +5773,140 @@ defineExpose({
   .fw-btn { padding: 4px 7px; font-size: 0.65rem; }
 }
 
-/* ─── Custom Value Popup ────────────────────────────────── */ 
-:global(.custom-value-popup .leaflet-popup-content-wrapper) { 
-  background: rgba(239, 242, 245, 0.9) !important; 
-  backdrop-filter: blur(14px) saturate(180%); 
-  border: 1px solid rgba(0, 0, 0, 0.35); 
-  border-radius: 12px; 
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4); 
-  padding: 10; 
-} 
-
-:global(.custom-value-popup .leaflet-popup-content) { 
-  margin: 5 !important; 
-  min-width: 190px !important;
-} 
-
-:global(.custom-value-popup .leaflet-popup-tip) { 
-  background: rgba(13, 25, 48, 0.88) !important; 
-  border-left: 1px solid rgba(0, 212, 168, 0.2); 
-  border-bottom: 1px solid rgba(0, 212, 168, 0.2); 
-} 
-
-.popup-content-multi {
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* ─── Unified Pixel Popup ───────────────────────────────── */
+.pixel-value-popup {
+  position: absolute;
+  z-index: 2100;
+  width: min(420px, calc(100% - 28px));
+  max-width: calc(100% - 28px);
+  transform: translate(12px, 12px);
+  color: #1f2937;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(12px) saturate(145%);
+  overflow: hidden;
+  pointer-events: none;
 }
 
-.popup-row {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  justify-content: space-between;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+.pixel-value-popup.pinned {
+  pointer-events: auto;
+  transform: translate(-50%, calc(-100% - 18px));
 }
 
-.popup-row:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+.pixel-value-popup.pinned::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border-right: 1px solid rgba(100, 116, 139, 0.18);
+  border-bottom: 1px solid rgba(100, 116, 139, 0.18);
+  transform: translateX(-50%) rotate(45deg);
 }
 
-:global(.custom-value-popup.light .leaflet-popup-content-wrapper) {
-  background: rgba(255, 255, 255, 0.94) !important;
-  border-color: rgba(13, 148, 136, 0.25);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
-}
-
-:global(.custom-value-popup.light .leaflet-popup-tip) {
-  background: rgba(255, 255, 255, 0.94) !important;
-}
-
-:global(.custom-value-popup.light .value-layer) {
-  color: #475569 !important;
-  font-weight: 600;
-}
-
-:global(.custom-value-popup.light .value-num) {
-  color: #0d9488 !important;
-  font-weight: 700;
-}
-
-:global(.custom-value-popup.light .value-unit) {
-  color: #64748b !important;
-}
-
-:global(.custom-value-popup.light .popup-row) {
-  border-bottom-color: rgba(0, 0, 0, 0.06);
-}
-
-:global(.custom-value-popup.light .popup-loading) {
-  color: #475569;
-}
-
-.popup-loading { 
-  padding: 14px 20px; 
-  color: #C8DFF0; 
-  font-family: 'JetBrains Mono', monospace; 
-  font-size: 0.85rem; 
-  display: flex; 
-  align-items: center; 
-  gap: 10px; 
-} 
-
-.value-layer { 
-  color: #C8DFF0; 
-  font-size: 0.8rem;
-  font-weight: 500; 
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-} 
-
-.value-num { 
-  color: #00D4A8; 
-  font-weight: 700; 
+.pixel-popup-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #64748b;
   font-size: 1rem;
-  font-family: 'JetBrains Mono', monospace; 
-  margin-left: auto;
-} 
+  line-height: 1;
+  cursor: pointer;
+}
 
-.value-unit { 
-  font-size: 0.72rem; 
-  color: #8AACCC; 
-  font-weight: 500; 
-} 
+.pixel-popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 38px 9px 12px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.14);
+  background: #f8fafc;
+}
 
-.no-data { 
-  padding: 14px 20px;
-  color: #8AACCC; 
-  font-style: italic; 
-  font-weight: 400; 
-  font-size: 0.85rem;
-} 
+.pixel-popup-kicker,
+.pixel-popup-date,
+.pixel-popup-table-head,
+.pixel-popup-layer,
+.pixel-popup-value,
+.pixel-popup-loading,
+.pixel-popup-empty {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.pixel-popup-kicker {
+  color: #334155;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.pixel-popup-date {
+  color: #0284c7;
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pixel-popup-table {
+  padding: 8px;
+}
+
+.pixel-popup-table-head,
+.pixel-popup-row {
+  display: grid;
+  grid-template-columns: minmax(88px, 1.15fr) repeat(4, minmax(48px, 0.7fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.pixel-popup-table-head {
+  padding: 0 6px 6px;
+  color: #64748b;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pixel-popup-row {
+  padding: 7px 6px;
+  border-top: 1px solid rgba(100, 116, 139, 0.1);
+}
+
+.pixel-popup-layer {
+  color: #334155;
+  font-size: 0.7rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pixel-popup-value {
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pixel-popup-loading,
+.pixel-popup-empty {
+  padding: 14px 16px;
+  color: #64748b;
+  font-size: 0.74rem;
+}
 
 /* ─── Floating Pixel Trend Widget ──────────────────────────────── */
 .pixel-trend-widget {
@@ -5356,18 +5916,15 @@ defineExpose({
   min-height: 44px;
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
-  border: 1px solid rgba(180, 205, 222, 0.18);
-  background:
-    linear-gradient(135deg, rgba(26, 42, 55, 0.72), rgba(7, 15, 21, 0.78) 42%, rgba(10, 25, 20, 0.68)),
-    rgba(9, 18, 26, 0.58);
-  backdrop-filter: blur(26px) saturate(155%);
-  -webkit-backdrop-filter: blur(26px) saturate(155%);
+  border-radius: 12px;
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   box-shadow:
-    0 30px 80px rgba(1, 10, 17, 0.42),
-    0 0 0 1px rgba(255, 255, 255, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  color: #eaf6fc;
+    0 24px 54px rgba(15, 23, 42, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.45);
+  color: #0f172a;
   overflow: hidden;
   transform-origin: top right;
   transition:
@@ -5383,14 +5940,7 @@ defineExpose({
 }
 
 .pixel-trend-widget::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 16% 0%, rgba(59, 159, 217, 0.16), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.065), transparent 38%);
-  opacity: 0.9;
+  content: none;
 }
 
 .pixel-trend-widget.dragging,
@@ -5400,7 +5950,7 @@ defineExpose({
 }
 
 .pixel-trend-widget.maximized {
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 .pixel-trend-widget.minimized {
@@ -5418,8 +5968,8 @@ defineExpose({
   justify-content: space-between;
   gap: 10px;
   padding: 7px 10px 7px 14px;
-  border-bottom: 1px solid rgba(180, 205, 222, 0.12);
-  background: rgba(7, 15, 22, 0.28);
+  border-bottom: 1px solid rgba(100, 116, 139, 0.14);
+  background: #f8fafc;
   flex-shrink: 0;
   cursor: grab;
   touch-action: none;
@@ -5440,7 +5990,7 @@ defineExpose({
   font-weight: 800;
   letter-spacing: 0.01em;
 }
-.pixel-widget-title svg { color: #3b9fd9; flex-shrink: 0; }
+.pixel-widget-title svg { color: #0284c7; flex-shrink: 0; }
 
 .pixel-widget-actions {
   display: inline-flex;
@@ -5454,10 +6004,10 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(180, 205, 222, 0.12);
+  border: 1px solid rgba(100, 116, 139, 0.18);
   border-radius: 8px;
-  color: #d7edf8;
-  background: rgba(255, 255, 255, 0.05);
+  color: #475569;
+  background: #ffffff;
   cursor: pointer;
   transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
   touch-action: manipulation;
@@ -5468,8 +6018,8 @@ defineExpose({
 }
 .pixel-widget-action:hover {
   transform: translateY(-1px);
-  background: rgba(59, 159, 217, 0.18);
-  color: #ffffff;
+  background: rgba(14, 165, 233, 0.1);
+  color: #0369a1;
 }
 .pixel-widget-action.close:hover {
   background: rgba(248, 113, 113, 0.18);
@@ -5483,7 +6033,7 @@ defineExpose({
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
   padding: 8px;
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
@@ -5528,9 +6078,9 @@ defineExpose({
   align-items: center;
   justify-content: center;
   text-align: center;
-  border: 1px solid rgba(180, 205, 222, 0.1);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(100, 116, 139, 0.14);
+  border-radius: 10px;
+  background: #f8fafc;
   padding: 24px;
 }
 .pixel-widget-loading {
@@ -5547,13 +6097,13 @@ defineExpose({
 }
 .pixel-widget-loading strong,
 .pixel-widget-error strong {
-  color: #f3fbff;
+  color: #0f172a;
   font-size: 0.95rem;
 }
 .pixel-widget-loading span,
 .pixel-widget-error span,
 .pixel-widget-empty {
-  color: #9fb7c6;
+  color: #64748b;
   font-size: 0.86rem;
 }
 .pixel-widget-error {
@@ -5571,8 +6121,8 @@ defineExpose({
 .pixel-loading-chart span {
   position: relative;
   overflow: hidden;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.065)
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.16)
 }
 .pixel-loading-grid span {
   height: 50px;
@@ -5585,7 +6135,7 @@ defineExpose({
   align-items: end;
   gap: 10px;
   padding: 18px;
-  border: 1px solid rgba(180, 205, 222, 0.1);
+  border: 1px solid rgba(100, 116, 139, 0.12);
 }
 .pixel-loading-chart span {
   min-height: 54px;
@@ -5663,7 +6213,7 @@ defineExpose({
 
 @media (max-width: 768px) {
   .pixel-trend-widget {
-    border-radius: 16px;
+    border-radius: 12px;
   }
   .pixel-widget-meta {
     grid-template-columns: 1fr;
@@ -5672,13 +6222,155 @@ defineExpose({
 
 @media (max-width: 480px) {
   .pixel-trend-widget {
-    border-radius: 14px;
+    border-radius: 12px;
   }
   .pixel-widget-header {
     padding: 10px 10px 10px 14px;
   }
   .pixel-widget-body {
     padding: 10px;
+  }
+}
+
+/* ─── GIS Map Overlays ───────────────────────────────────── */
+.mouse-coordinate-display {
+  position: absolute;
+  top: 12px;
+  left: 52px;
+  z-index: 1000;
+  padding: 4px 4px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.34);
+  color: #fff;
+  font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 2.25;
+  letter-spacing: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+}
+
+:global(.gis-scale-control) {
+  margin-left: 14px !important;
+  margin-bottom: 22px !important;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #fff;
+  font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
+  pointer-events: none;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.95),
+    0 0 2px rgba(0, 0, 0, 0.9);
+}
+
+:global(.gis-scale-ratio) {
+  margin-bottom: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+:global(.gis-scale-labels) {
+  position: relative;
+  height: 14px;
+  margin-bottom: 1px;
+}
+
+:global(.gis-scale-label) {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+:global(.gis-scale-label:first-child) {
+  transform: translateX(0);
+}
+
+:global(.gis-scale-label:last-child) {
+  transform: translateX(-100%);
+}
+
+:global(.gis-scale-bar) {
+  display: flex;
+  width: 100%;
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(20, 20, 20, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+:global(.gis-scale-segment) {
+  display: block;
+  height: 100%;
+  border-right: 1px solid rgba(20, 20, 20, 0.82);
+}
+
+:global(.gis-scale-segment:nth-child(odd)) {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+:global(.gis-scale-segment:nth-child(even)) {
+  background: rgba(123, 130, 131, 0.9);
+}
+
+:global(.gis-scale-segment:last-child) {
+  border-right: 0;
+}
+
+/* ─── Responsive adjustments ────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .info-panel-btn {
+    bottom: 10px;
+    left: 10px;
+    width: 44px;
+    height: 44px;
+  }
+  .pixel-value-popup {
+    width: min(360px, calc(100% - 20px));
+  }
+  .pixel-popup-table-head,
+  .pixel-popup-row {
+    grid-template-columns: minmax(76px, 1fr) repeat(4, minmax(38px, 0.62fr));
+    gap: 5px;
+  }
+  .mouse-coordinate-display {
+    top: 10px;
+    left: 50px;
+    font-size: 10px;
+  }
+  :global(.gis-scale-control) {
+    margin-left: 10px !important;
+    margin-bottom: 16px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .info-panel-btn {
+    width: 42px;
+    height: 42px;
+  }
+  .pixel-value-popup {
+    width: min(310px, calc(100% - 16px));
+  }
+  .pixel-popup-table {
+    padding: 6px;
+  }
+  .pixel-popup-table-head,
+  .pixel-popup-row {
+    font-size: 0.6rem;
+    grid-template-columns: minmax(64px, 0.95fr) repeat(4, minmax(34px, 0.58fr));
   }
 }
  

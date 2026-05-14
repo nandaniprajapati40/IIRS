@@ -3964,10 +3964,10 @@ function getLegendGradient(key) {
 // ── Layer definitions (with ETc) ──────────────────────────────────────────
 const layerDefs = [
   { key:'savi', icon:'', name:'Soil Adjusted Vegetation Index',            maxLabel:'1.0',     midLabel:'0.0',     minLabel:'-1.0'  },
-  { key:'kc',   icon:'', name:'Crop Coefficient (FAO-56)',                 maxLabel:'1.5',     midLabel:'0.75',    minLabel:'0.0'   },
-  { key:'etc',  icon:'', name:'Evapotranspiration — ETc (mm/day)',  maxLabel:'15 mm/d', midLabel:'7.5 mm/d', minLabel:'0 mm/d' },
-  { key:'cwr',  icon:'', name:'Crop Water Requirement (15-day cumulative mm)',  maxLabel:'150 mm',  midLabel:'75 mm',   minLabel:'0 mm'  },
-  { key:'iwr',  icon:'', name:'Irrigation Water Requirement (15-day cumulative mm)', maxLabel:'150 mm', midLabel:'75 mm', minLabel:'0 mm' },
+  { key:'kc',   icon:'', name:'Crop Coefficient',                 maxLabel:'1.5',     midLabel:'0.75',    minLabel:'0.0'   },
+  { key:'etc',  icon:'', name:'Evapotranspiration',  maxLabel:'15 mm/d', midLabel:'7.5 mm/d', minLabel:'0 mm/d' },
+  { key:'cwr',  icon:'', name:'Crop Water Requirement',  maxLabel:'150 mm',  midLabel:'75 mm',   minLabel:'0 mm'  },
+  { key:'iwr',  icon:'', name:'Irrigation Water Requirement', maxLabel:'150 mm', midLabel:'75 mm', minLabel:'0 mm' },
   
 ]
 

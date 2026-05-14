@@ -169,9 +169,13 @@ const mode = ref('monthly')
 const error = ref(null)
 const chartOpacity = ref(clamp(Number(props.modelOpacity) || 0.9, 0.2, 1))
 const chartViewportWidth = ref(0)
+const chartViewportHeight = ref(0)
 const isChartPanning = ref(false)
 const selectedSeason = ref(null)
 let chartPanStart = null
+
+const MIN_CHART_VIEWPORT_WIDTH = 280
+const MAX_CHART_CANVAS_WIDTH = 10000
 
 // ── Layer metadata (same units as DataChart / info panel) ─────────────────
 const LAYER_CONFIG = {
@@ -321,11 +325,18 @@ const canRenderChart = computed(() => {
 })
 
 const chartCanvasWidth = computed(() => {
-  const viewport = Math.max(320, chartViewportWidth.value || 0)
+  const viewport = Math.max(MIN_CHART_VIEWPORT_WIDTH, chartViewportWidth.value || 0)
   const points = Math.max(1, observationCount.value)
-  const pointWidth = viewport < 520 ? 54 : 46
-  const naturalWidth = points * pointWidth
-  return Math.max(viewport, Math.round(naturalWidth))
+  const isAllSeasons = activeSeason.value === ALL_SEASONS
+
+  if (!isAllSeasons) {
+    return viewport
+  }
+
+  const basePointWidth = viewport < 480 ? 26 : viewport < 760 ? 32 : 38
+  const naturalWidth = points * basePointWidth
+  const cappedWidth = Math.min(naturalWidth, MAX_CHART_CANVAS_WIDTH)
+  return Math.max(viewport, Math.round(cappedWidth))
 })
 
 // ── Chart rendering ───────────────────────────────────────────────────────
@@ -384,8 +395,10 @@ function clamp(value, min, max) {
 
 function measureChartViewport() {
   if (!chartViewport.value) return
-  chartViewportWidth.value = Math.floor(chartViewport.value.clientWidth)
-  if (!chart && !chartBuildInProgress && canRenderChart.value && chartViewport.value.clientHeight > 0) {
+  const rect = chartViewport.value.getBoundingClientRect()
+  chartViewportWidth.value = Math.floor(rect.width || chartViewport.value.clientWidth || 0)
+  chartViewportHeight.value = Math.floor(rect.height || chartViewport.value.clientHeight || 0)
+  if (!chart && !chartBuildInProgress && canRenderChart.value && chartViewportHeight.value > 0) {
     scheduleBuildChart()
   }
 }
@@ -399,7 +412,13 @@ function attachChartViewportObserver() {
 
   chartViewportObserver = new ResizeObserver(entries => {
     const entry = entries[0]
-    chartViewportWidth.value = Math.floor(entry.contentRect.width)
+    const nextWidth = Math.floor(entry.contentRect.width)
+    const nextHeight = Math.floor(entry.contentRect.height)
+    const widthChanged = nextWidth !== chartViewportWidth.value
+    const heightChanged = nextHeight !== chartViewportHeight.value
+    chartViewportWidth.value = nextWidth
+    chartViewportHeight.value = nextHeight
+    if (!widthChanged && !heightChanged) return
     scheduleChartLayout()
   })
   chartViewportObserver.observe(chartViewport.value)
@@ -417,6 +436,8 @@ function scheduleChartLayout() {
   chartLayoutFrame = requestAnimationFrame(() => {
     chartLayoutFrame = null
     if (chartDestroying || !chart || !isChartCanvasConnected()) return
+    measureChartViewport()
+    if (!chartViewportWidth.value || !chartViewportHeight.value) return
     const labelCount = chart.data?.labels?.length || 0
     if (chart.options?.scales?.x?.ticks) {
       chart.options.scales.x.ticks.maxTicksLimit = xTickLimit(labelCount)
@@ -480,6 +501,24 @@ function stopChartPan(event) {
   chartPanStart = null
 }
 
+function getViewportScrollRatio() {
+  const viewport = chartViewport.value
+  if (!viewport) return 0
+  const maxScroll = viewport.scrollWidth - viewport.clientWidth
+  if (maxScroll <= 0) return 0
+  return clamp(viewport.scrollLeft / maxScroll, 0, 1)
+}
+
+function restoreViewportScrollRatio(ratio) {
+  const viewport = chartViewport.value
+  if (!viewport) return
+  requestAnimationFrame(() => {
+    if (!viewport.isConnected) return
+    const maxScroll = viewport.scrollWidth - viewport.clientWidth
+    viewport.scrollLeft = maxScroll > 0 ? Math.round(maxScroll * clamp(ratio, 0, 1)) : 0
+  })
+}
+
 async function buildChart() {
   const runId = ++chartBuildRun
   error.value = null
@@ -493,7 +532,10 @@ async function buildChart() {
   chartBuildInProgress = false
   if (!isChartCanvasConnected()) return
   measureChartViewport()
-  if (!chartViewportWidth.value || chartViewport.value?.clientHeight === 0) {
+  if (!chartViewportWidth.value || !chartViewportHeight.value) {
+    setTimeout(() => {
+      if (componentAlive && canRenderChart.value) scheduleBuildChart()
+    }, 60)
     return
   }
 
@@ -533,6 +575,7 @@ function renderMonthly({ runId, textColor, gridColor, tooltipBg, tooltipBorder, 
   )].sort()
   const labels = dates.map(formatDateLabel)
   const densePoints = dates.length > 140
+  const previousScrollRatio = getViewportScrollRatio()
 
   // const ctx = chartCanvas.value.getContext('2d')
   const canvas = chartCanvas.value
@@ -566,6 +609,7 @@ function renderMonthly({ runId, textColor, gridColor, tooltipBg, tooltipBorder, 
     responsive: true,
     maintainAspectRatio: false,
     resizeDelay: 80,
+    devicePixelRatio: chartCanvasWidth.value > 7000 ? 1 : Math.min(window.devicePixelRatio || 1, 1.6),
     interaction: { mode: 'index', intersect: false },
     animation: false,
     transitions: {
@@ -641,6 +685,8 @@ function renderMonthly({ runId, textColor, gridColor, tooltipBg, tooltipBorder, 
     chart.options = chartConfig
     try {
       chart.update('none')
+      chart.resize()
+      restoreViewportScrollRatio(previousScrollRatio)
     } catch (err) {
       if (isChartCanvasConnected()) console.warn('Chart update skipped:', err)
     }
@@ -663,12 +709,13 @@ function renderMonthly({ runId, textColor, gridColor, tooltipBg, tooltipBorder, 
     },
     options: chartConfig,
   })
+  restoreViewportScrollRatio(previousScrollRatio)
 }
 
 // ── Watchers & lifecycle ──────────────────────────────────────────────────
 watch(() => props.pixelData, data => {
+  destroyChart()
   if (!data) {
-    destroyChart()
     return
   }
   selectedSeason.value = null
@@ -757,18 +804,23 @@ onUnmounted(() => {
 .chart-container {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0.85rem 1rem 0.55rem;
+  padding: 0.55rem;
   gap: 0;
-  background: #fff;
-  color: #1b485f;
+  background: #ffffff;
+  color: #0f172a;
   font-family: 'Inter', 'Segoe UI', sans-serif;
+  border-radius: 10px;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 .chart-container.glass {
   padding: 0;
   background: transparent;
-  color: #eaf6fc;
+  color: #0f172a;
 }
 .chart-container.compact {
   gap: 0;
@@ -776,10 +828,10 @@ onUnmounted(() => {
 
 /* ── Pixel header ── */
 .pixel-header {
-  margin-bottom: 0.45rem;
+  margin-bottom: 0;
 }
 .chart-container.compact .pixel-header {
-  margin-bottom: 0.35rem;
+  margin-bottom: 0;
 }
 .pixel-meta {
   display: flex;
@@ -797,7 +849,7 @@ onUnmounted(() => {
   padding: 3px 10px;
   font-size: 0.78rem;
   font-weight: 700;
-  color: #1b5fa8;
+  color: #ffffff;
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.04em;
 }
@@ -817,12 +869,13 @@ onUnmounted(() => {
 
 /* ── Controls (reuse DataChart styles exactly) ── */
 .chart-controls {
-  display: grid;
-  grid-template-columns: minmax(92px, 1fr) auto minmax(112px, auto);
+  display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.35rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.4rem;
   min-width: 0;
+  flex: 0 0 auto;
 }
 .chart-container.compact .chart-controls {
   margin-bottom: 0.35rem;
@@ -841,20 +894,21 @@ onUnmounted(() => {
   min-width: 0;
 }
 .view-control {
-  flex: 0 1 auto;
+  flex: 0 1 240px;
   flex-direction: row;
   align-items: center;
+  max-width: min(100%, 280px);
 }
 .control-group label {
   font-size: 0.62rem;
   font-weight: 600;
-  color: #0d1012;
+  color: #475569;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 .chart-container.glass .control-group label {
-  color: #c7dbe7;
+  color: #334155;
 }
 .selected-layer-badge {
   min-height: 28px;
@@ -924,14 +978,11 @@ onUnmounted(() => {
   height: 40px;
   padding: 0.45rem 2.35rem 0.45rem 0.9rem;
   border: 1px solid rgba(180, 205, 222, 0.16);
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.035)),
-    rgba(7, 14, 20, 0.62);
-  backdrop-filter: blur(16px);
+  border-radius: 10px;
+  background: #ffffff;
   font-size: 0.86rem;
   font-weight: 800;
-  color: #f0f4f8;
+  color: #0f172a;
   outline: none;
   cursor: pointer;
   appearance: none;
@@ -939,8 +990,8 @@ onUnmounted(() => {
   transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
 }
 .select option {
-  background: #101922;
-  color: #eaf6fc;
+  background: #ffffff;
+  color: #0f172a;
 }
 .select:hover { border-color: rgba(59, 159, 217, 0.45); }
 .select:focus {
@@ -953,7 +1004,7 @@ onUnmounted(() => {
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  color: #98c8e7;
+  color: #64748b;
   display: inline-flex;
 }
 .toggle-switch,
@@ -1046,7 +1097,7 @@ onUnmounted(() => {
   font-size: 0.9rem;
 }
 .chart-container.glass .loading-overlay {
-  color: #9fb7c6;
+  color: #64748b;
 }
 .chart-skeleton-line,
 .chart-skeleton-panel,
@@ -1054,7 +1105,7 @@ onUnmounted(() => {
   position: relative;
   overflow: hidden;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(148, 163, 184, 0.16);
 }
 .chart-skeleton-line {
   height: 14px;
@@ -1070,7 +1121,7 @@ onUnmounted(() => {
   align-items: end;
   gap: 10px;
   padding: 18px;
-  border: 1px solid rgba(180, 205, 222, 0.1);
+  border: 1px solid rgba(100, 116, 139, 0.12);
 }
 .chart-skeleton-panel span {
   min-height: 52px;
@@ -1117,9 +1168,9 @@ onUnmounted(() => {
   border-color: rgba(100, 116, 139, 0.25);
 }
 .chart-container.glass .no-data-box {
-  color: #a8bfd0;
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(180, 205, 222, 0.12);
+  color: #64748b;
+  background: #f8fafc;
+  border-color: rgba(100, 116, 139, 0.16);
 }
 
 /* ── Chart wrapper (reuse DataChart) ── */
@@ -1127,6 +1178,7 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   height: 0;
+  min-width: 0;
   position: relative;
   background: #fff;
   border: 1px solid rgba(60, 60, 60, 0.08);
@@ -1136,18 +1188,19 @@ onUnmounted(() => {
 }
 .chart-container.glass .chart-wrapper {
   background: #fff;
-  border-color: rgba(255, 255, 255, 0.34);
-  border-radius: 10px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 12px 28px rgba(1, 10, 17, 0.12);
+  border-color: rgba(100, 116, 139, 0.14);
+  border-radius: 8px;
+  box-shadow: none;
 }
 .chart-viewport {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   position: relative;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior: contain;
   scroll-behavior: smooth;
   cursor: grab;
   scrollbar-color: rgba(59, 159, 217, 0.58) rgba(255, 255, 255, 0.06);
@@ -1173,12 +1226,15 @@ onUnmounted(() => {
   position: relative;
   min-width: 100%;
   height: 100%;
+  min-height: 100%;
   transition: width 0.24s ease;
 }
 .chart {
   display: block;
   width: 100% !important;
   height: 100% !important;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 
 .pixel-stats {
@@ -1224,27 +1280,26 @@ onUnmounted(() => {
 /* ── Record hint ── */
 .record-hint {
   font-size: 0.68rem;
-  color: #94a3b8;
+  color: #334155;
   text-align: right;
   padding: 4px 2px 0;
 }
 .chart-container.glass .record-hint {
-  color: #8ba8bb;
+  color: #334155;
 }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
-  .chart-container { padding: 1rem; }
+  .chart-container { padding: 0.65rem; }
   .chart-container.glass { padding: 0; }
   .chart-controls {
-    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.35rem;
     overflow: visible;
     padding-bottom: 2px;
   }
   .control-group { width: auto; flex-shrink: 0; }
   .layer-control { max-width: none; }
-  .view-control { width: auto; }
+  .view-control { width: 100%; max-width: 100%; }
   .toggle-switch { width: auto; }
   .toggle-option { flex: 1; }
   .select { min-width: 0; width: 100%; }

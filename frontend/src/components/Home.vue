@@ -91,128 +91,55 @@
 
     <!-- ══════════════════ STUDY REGION ══════════════════ -->
     <section class="region-section" id="region">
+      <div class="region-shell">
+        <div class="region-header">
+          <span class="section-tag">Study Region</span>
+          <h2 class="section-title">Futuristic GIS Irrigation Intelligence</h2>
+          <p class="section-subtitle">
+            Udham Singh Nagar Rabi wheat fields monitored through satellite layers, ET tower telemetry, rainfall signals and crop water demand analytics.
+          </p>
+        </div>
 
-      <!-- Section Header -->
-      <div class="region-header">
-        <span class="section-tag">🌾 Study Region</span>
-        <h2 class="section-title" style="margin-bottom:12px">Rabi Wheat Belt — Udham Singh Nagar</h2>
-        <p class="section-subtitle">Field observations, ground-truth data, and satellite-derived indicators
-        from Uttarakhand's most irrigation-intensive district.</p>
-      </div>
-
-      <!-- Main Content Grid: Text left, Gallery right -->
-      <div class="region-full-width">
         <div class="region-main-grid">
+          <article class="region-visual-card">
+            <img src="/assets/towercrop.jpg" alt="Agriculture monitoring tower in wheat field" class="region-feature-img" />
+            <div class="region-image-shade"></div>
+            <div class="region-scanline"></div>
+            <div class="region-visual-content">
+              <div class="region-kicker">
+                <span class="region-live-dot"></span>
+                Field Network Online
+              </div>
+              <h3>Udham Singh Nagar, Uttarakhand</h3>
+              <div class="region-metrics">
+                <div>
+                  <strong>Rabi</strong>
+                  <span>Wheat season</span>
+                </div>
+                <div>
+                  <strong>ET</strong>
+                  <span>Tower calibration</span>
+                </div>
+                <div>
+                  <strong>GIS</strong>
+                  <span>Spatial monitoring</span>
+                </div>
+              </div>
+            </div>
+          </article>
 
-          <!-- ── Left: Info Panel ── -->
-          <div class="region-info-panel">
-            <div class="region-info-block">
-              <div class="rib-icon">🗺️</div>
-              <div>
-                <h4 class="rib-title">Location</h4>
-                <p class="rib-desc">Udham Singh Nagar, Uttarakhand, India — a terai district bordering UP, characterised by flat alluvial plains and canal-fed agriculture.</p>
+          <div class="region-card-grid">
+            <article v-for="card in studyCards" :key="card.title" class="region-tech-card">
+              <div class="rtc-top">
+                <span class="rtc-icon">{{ card.icon }}</span>
+                <span class="rtc-signal">{{ card.signal }}</span>
               </div>
-            </div>
-            <div class="region-info-block">
-              <div class="rib-icon">🌾</div>
-              <div>
-                <h4 class="rib-title">Crop & Season</h4>
-                <p class="rib-desc"><strong>Rabi Wheat</strong> is the primary crop, sown in November and harvested by April — spanning ~150 days with highly variable water demand across growth stages.</p>
-              </div>
-            </div>
-            <div class="region-info-block">
-              <div class="rib-icon">🛰️</div>
-              <div>
-                <h4 class="rib-title">ET Monitoring</h4>
-                <p class="rib-desc">An Eddy Covariance tower (LAS &amp; MMT) continuously measures actual evapotranspiration, validated against satellite-derived estimates.</p>
-              </div>
-            </div>
-            <div class="region-info-block">
-              <div class="rib-icon">💧</div>
-              <div>
-                <h4 class="rib-title">Irrigation Need</h4>
-                <p class="rib-desc">Minimal Rabi rainfall makes the region <strong>entirely dependent on irrigation</strong>, making precise scheduling critical for water conservation.</p>
-              </div>
-            </div>
-            <div class="region-info-block">
-              <div class="rib-icon">📊</div>
-              <div>
-                <h4 class="rib-title">Data Integration</h4>
-                <p class="rib-desc">Extensive datasets from satellite imagery are cross-referenced with ground-level sensors to ensure highly accurate predictive models for crop water needs.</p>
-              </div>
-            </div>
-            <div class="region-info-block">
-              <div class="rib-icon">🌱</div>
-              <div>
-                <h4 class="rib-title">Yield Optimization</h4>
-                <p class="rib-desc">By fine-tuning irrigation schedules based on our rigorous monitoring, farmers can maximize wheat yield while minimizing water waste.</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- ── Right: Photo Mosaic ── -->
-          <div class="region-mosaic">
-            <!-- Large hero image -->
-            <div class="mosaic-hero">
-              <img src="/assets/images2.jpeg" alt="Wheat field researcher" class="mosaic-img" />
-              <div class="mosaic-label">Rabi Wheat — Field Observation, Udham Singh Nagar</div>
-            </div>
-            <!-- Three smaller images -->
-            <div class="mosaic-trio">
-              <div class="mosaic-cell">
-                <img src="/assets/tower.jpg" alt="ET Measurement Tower" class="mosaic-img" />
-                <div class="mosaic-label">ET Flux Tower</div>
-              </div>
-              <div class="mosaic-cell">
-                <img src="/assets/images4.jpeg" alt="Weather stations in wheat field" class="mosaic-img" />
-                <div class="mosaic-label">Agro-Met Stations</div>
-              </div>
-              <div class="mosaic-cell">
-                <img src="/assets/map.jpeg" alt="Udham Singh Nagar map" class="mosaic-img map-cell" />
-                <div class="mosaic-label">District Boundary</div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      <!-- ── Bottom: Full-width Field Equipment Strip ── -->
-      <div class="region-strip">
-        <div class="section-inner">
-          <p class="strip-eyebrow">Field Infrastructure &amp; Instruments</p>
-          <div class="region-strip-grid">
-            <div class="rs-card">
-              <div class="rs-img-wrap">
-                <img src="/assets/image1.jpeg" alt="Weather monitoring station" class="rs-img" />
-              </div>
-              <div class="rs-body">
-                <h5 class="rs-title">Agro-Met Weather Station</h5>
-                <p class="rs-desc">Real-time sensors for wind speed, humidity, temperature and solar radiation — feeding meteorological data to the ET model.</p>
-              </div>
-            </div>
-            <div class="rs-card">
-              <div class="rs-img-wrap">
-                <img src="/assets/images3.jpeg" alt="Eddy covariance flux tower" class="rs-img" />
-              </div>
-              <div class="rs-body">
-                <h5 class="rs-title">Eddy Covariance System</h5>
-                <p class="rs-desc">The LAS &amp; MMT towers measure actual crop evapotranspiration at field scale, used to validate satellite-based estimates.</p>
-              </div>
-            </div>
-            <div class="rs-card rs-card-wide">
-              <div class="rs-img-wrap rs-img-wide">
-                <img src="/assets/towercrop.jpg" alt="ET Station and LAI measurements" class="rs-img" />
-              </div>
-              <div class="rs-body">
-                <h5 class="rs-title">ET Station — Seasonal LAI &amp; NDVI Monitoring</h5>
-                <p class="rs-desc">Monthly LAI measurements (Sept–Apr) alongside NDVI maps capture the full crop growth cycle from transplanting to harvest, anchoring satellite calibration.</p>
-              </div>
-            </div>
+              <h3>{{ card.title }}</h3>
+              <p>{{ card.text }}</p>
+            </article>
           </div>
         </div>
       </div>
-
     </section>
 
     <!-- ══════════════════ OVERVIEW STATS ══════════════════ -->
@@ -271,6 +198,45 @@ const particles = Array.from({ length: 18 }, (_, i) => ({
   delay: Math.random() * 10, dur: 8 + Math.random() * 10,
   size: 2 + Math.random() * 4, op: 0.08 + Math.random() * 0.22,
 }))
+
+const studyCards = [
+  {
+    icon: 'SR',
+    signal: 'Terai GIS',
+    title: 'Study Region',
+    text: 'Canal-fed wheat belt with field boundaries, terrain context and seasonal crop masks.'
+  },
+  {
+    icon: 'CM',
+    signal: 'NDVI / LAI',
+    title: 'Crop Monitoring',
+    text: 'Growth stage intelligence from vegetation indices and in-season field observations.'
+  },
+  {
+    icon: 'ET',
+    signal: 'Flux Tower',
+    title: 'ET Tower Data',
+    text: 'Ground evapotranspiration measurements for calibration of crop water requirement maps.'
+  },
+  {
+    icon: 'SO',
+    signal: 'Satellite Stack',
+    title: 'Satellite Observation',
+    text: 'Multi-date remote sensing layers aligned with irrigation demand and crop vigor.'
+  },
+  {
+    icon: 'RA',
+    signal: 'Rainfall Grid',
+    title: 'Rainfall Analysis',
+    text: 'Rainfall variability tracked against field water stress and irrigation windows.'
+  },
+  {
+    icon: 'WO',
+    signal: 'Decision Layer',
+    title: 'Water Optimization',
+    text: 'Spatial recommendations to reduce waste while keeping wheat productivity stable.'
+  }
+]
 </script>
 
 <style scoped>
@@ -784,265 +750,289 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', sans-serif; }
 
 
 /* ──────────────────────────────────────────────────────────────────────
-   STUDY REGION  — Enhanced
+   STUDY REGION
    ────────────────────────────────────────────────────────────────────── */
 .region-section {
-  padding: 90px 0 0;
-  background: #0b1827 !important;
-  position: relative; z-index: 1;
+  position: relative;
+  z-index: 1;
+  padding: 96px 24px;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(0, 212, 168, 0.16), transparent 28%),
+    radial-gradient(circle at 88% 18%, rgba(59, 130, 246, 0.15), transparent 30%),
+    linear-gradient(135deg, #030711 0%, #071323 46%, #071d1c 100%);
   overflow: hidden;
-  border: none;
+  border-top: 1px solid rgba(0, 212, 168, 0.12);
+  border-bottom: 1px solid rgba(0, 212, 168, 0.12);
 }
-
-/* ── Header ── */
-.region-header {
-  text-align: center;
-  padding: 0 24px 60px;
-  max-width: 800px;
+.region-section::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0, 212, 168, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 168, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, transparent, black 18%, black 78%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 18%, black 78%, transparent);
+  pointer-events: none;
+}
+.region-shell {
+  position: relative;
+  z-index: 2;
+  max-width: 1220px;
   margin: 0 auto;
 }
-.region-header .section-title { color: #0F172A !important; }
-.region-header .section-subtitle { color: #334155 !important; }
-
-/* ── Main Grid ── */
-.region-full-width {
-  width: 100%;
-  max-width: 100%;
-  padding: 0;
+.region-header {
+  max-width: 760px;
+  margin: 0 auto 44px;
+  text-align: center;
+}
+.region-header .section-tag {
+  background: rgba(0, 212, 168, 0.1);
+  border-color: rgba(0, 212, 168, 0.28);
+  color: #70ffe3;
+}
+.region-header .section-title {
+  color: #f8fafc;
+  margin-bottom: 14px;
+}
+.region-header .section-subtitle {
+  color: #a8b8c9;
+  max-width: 720px;
 }
 .region-main-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
+  grid-template-columns: minmax(360px, 1.08fr) minmax(420px, 0.92fr);
+  gap: 28px;
   align-items: stretch;
-  padding-bottom: 0;
-  width: 100%;
 }
-
-/* ── Left Info Panel ── */
-.region-info-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 60px 8%;
-  justify-content: center;
-  background: #0b1827;
-}
-.region-info-block {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-  padding: 24px 0;
-  border-bottom: none;
-}
-.region-info-block:last-of-type { border-bottom: none; }
-.rib-icon {
-  flex-shrink: 0;
-  width: 52px; height: 52px;
-  border-radius: 12px;
-  background: rgba(13, 148, 136, 0.1);
-  border: none;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1.5rem;
-}
-.rib-title {
-  font-family: 'Outfit', sans-serif;
-  font-size: 1.15rem; font-weight: 700;
-  color: #0F172A !important; margin: 0 0 6px;
-}
-.rib-desc {
-  font-size: 0.95rem; color: #334155 !important;
-  line-height: 1.7; margin: 0;
-}
-.rib-desc strong { color: #0F172A !important; font-weight: 700; }
-
-/* Quick Stats */
-.region-quick-stats {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 18px 24px;
-  margin: 20px 0 16px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
-}
-.rqs-item { flex: 1; text-align: center; }
-.rqs-val {
-  display: block;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 1.6rem; font-weight: 800;
-  color: var(--accent-teal);
-  text-shadow: 0 0 14px rgba(0,212,168,0.35);
-}
-.rqs-label {
-  display: block;
-  font-size: 0.7rem; font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-top: 2px;
-}
-.rqs-divider {
-  width: 1px; height: 44px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
-/* Tags */
-.region-desc {
-  font-size: 1rem; color: var(--text-secondary); line-height: 1.8; margin: 0 0 20px;
-}
-.region-desc strong { color: var(--text-primary); font-weight: 600; }
-.region-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.rtag {
-  padding: 6px 14px; border-radius: 50px;
-  border: 1px solid var(--border);
-  background: var(--surface); font-size: 0.78rem; font-weight: 500;
-  color: var(--text-secondary); white-space: nowrap;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-  transition: all 0.2s ease;
-}
-.rtag:hover { border-color: var(--accent-teal); color: var(--accent-teal); transform: translateY(-2px); }
-
-/* ── Right: Photo Mosaic ── */
-.region-mosaic {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  width: 100%;
-}
-.mosaic-hero {
+.region-visual-card {
   position: relative;
-  border-radius: 0;
+  min-height: 620px;
+  border-radius: 28px;
   overflow: hidden;
-  aspect-ratio: 1/1;
-  border: none;
-  box-shadow: none;
-  width: 100%;
+  border: 1px solid rgba(112, 255, 227, 0.24);
+  background: rgba(8, 18, 33, 0.72);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255,255,255,0.08);
 }
-.mosaic-trio {
+.region-feature-img {
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  filter: saturate(1.06) contrast(1.03);
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.region-visual-card:hover .region-feature-img { transform: scale(1.035); }
+.region-image-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(3, 7, 17, 0.02) 0%, rgba(3, 7, 17, 0.46) 55%, rgba(3, 7, 17, 0.94) 100%),
+    linear-gradient(90deg, rgba(0, 212, 168, 0.18), transparent 48%);
+}
+.region-scanline {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 0%, rgba(112, 255, 227, 0.13) 50%, transparent 100%);
+  height: 34%;
+  animation: regionScan 5.5s ease-in-out infinite;
+  opacity: 0.55;
+}
+@keyframes regionScan {
+  0%, 100% { transform: translateY(-85%); }
+  50% { transform: translateY(250%); }
+}
+.region-visual-content {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 28px;
+}
+.region-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(3, 7, 17, 0.56);
+  border: 1px solid rgba(112, 255, 227, 0.22);
+  color: #70ffe3;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+.region-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #00d4a8;
+  box-shadow: 0 0 16px rgba(0, 212, 168, 0.9);
+}
+.region-visual-content h3 {
+  max-width: 520px;
+  margin: 18px 0 20px;
+  color: #ffffff;
+  font-size: clamp(1.9rem, 4vw, 3.4rem);
+  line-height: 1;
+  font-weight: 800;
+  text-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+}
+.region-metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0;
-  width: 100%;
+  gap: 10px;
 }
-.mosaic-cell {
-  position: relative;
-  border-radius: 0;
-  overflow: hidden;
-  aspect-ratio: 1/1;
-  border: none;
-  box-shadow: none;
+.region-metrics div {
+  min-width: 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(5, 13, 26, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
-.mosaic-img {
-  width: 50%; height: 50%;
-  object-fit: cover; object-position: center;
+.region-metrics strong {
   display: block;
-  transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
-}
-.map-cell .mosaic-img { object-fit: contain; background: #fff; }
-.mosaic-hero:hover .mosaic-img,
-.mosaic-cell:hover .mosaic-img { transform: scale(1.06); }
-.mosaic-label {
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  padding: 12px 16px;
-  background: linear-gradient(to top, rgba(15,23,42,0.8) 0%, transparent 100%);
-  color: #FFFFFF;
-  font-size: 0.75rem; font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   font-family: 'JetBrains Mono', monospace;
+  color: #70ffe3;
+  font-size: 1.05rem;
+  margin-bottom: 4px;
 }
-.home-root:not(.dark) .mosaic-label {
-  background: linear-gradient(to top, rgba(15,23,42,0.85) 0%, transparent 100%);
-  color: #FFFFFF;
+.region-metrics span {
+  display: block;
+  color: #c7d2de;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
-
-/* ── Bottom Strip ── */
-.region-strip {
-  background: #0b1827 !important;
-  border-top: 1px solid rgba(0,0,0,0.05);
-  padding: 60px 24px;
-  margin-top: 0;
-}
-.region-section .strip-eyebrow { color: #0F172A !important; }
-.region-section .rs-title { color: #0F172A !important; }
-.region-section .rs-desc { color: #334155 !important; }
-.strip-eyebrow {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.72rem; font-weight: 700;
-  color: var(--accent-teal);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  margin: 0 0 28px;
-}
-.region-strip-grid {
+.region-card-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.4fr;
-  gap: 20px;
-  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
-.rs-card {
+.region-tech-card {
+  position: relative;
+  min-height: 190px;
+  padding: 22px;
   border-radius: 20px;
   overflow: hidden;
-  border: 1px solid rgba(0,0,0,0.05);
-  background: #0b1827 !important;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.04);
-  display: flex;
-  flex-direction: column;
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  background: linear-gradient(145deg, rgba(15, 29, 49, 0.78), rgba(8, 18, 33, 0.52));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 18px 40px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
 }
-.rs-card:hover {
+.region-tech-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 18% 18%, rgba(0, 212, 168, 0.13), transparent 36%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.region-tech-card:hover {
   transform: translateY(-6px);
-  box-shadow: 0 20px 40px rgba(0,0,0,0.08);
-  border-color: rgba(13,148,136,0.2);
+  border-color: rgba(112, 255, 227, 0.42);
+  background: linear-gradient(145deg, rgba(19, 39, 64, 0.88), rgba(8, 27, 42, 0.68));
+  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.32), 0 0 28px rgba(0, 212, 168, 0.12);
 }
-.rs-img-wrap {
-  width: 100%;
-  aspect-ratio: 16/9;
-  overflow: hidden;
+.region-tech-card:hover::before { opacity: 1; }
+.rtc-top {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 26px;
 }
-.rs-img-wide { aspect-ratio: 16/7; }
-.rs-img {
-  width: 100%; height: 100%;
-  object-fit: cover; object-position: center;
-  display: block;
-  transition: transform 0.6s ease;
+.rtc-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 212, 168, 0.1);
+  border: 1px solid rgba(0, 212, 168, 0.22);
+  color: #70ffe3;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
 }
-.rs-card:hover .rs-img { transform: scale(1.06); }
-.rs-body { padding: 18px 20px 22px; flex: 1; }
-.rs-title {
-  font-family: 'Outfit', sans-serif;
-  font-size: 0.95rem; font-weight: 700;
-  color: var(--text-primary);
-  margin: 0 0 8px;
+.rtc-signal {
+  color: #8aa0b5;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-.rs-desc {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  line-height: 1.7; margin: 0;
+.region-tech-card h3 {
+  position: relative;
+  z-index: 1;
+  color: #f8fafc;
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin: 0 0 10px;
 }
-
-/* ── Responsive ── */
+.region-tech-card p {
+  position: relative;
+  z-index: 1;
+  color: #98aabe;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0;
+}
 @media (max-width: 1100px) {
-  .region-main-grid { grid-template-columns: 1fr; gap: 0; }
-  .region-strip-grid { grid-template-columns: 1fr 1fr; }
-  .rs-card-wide { grid-column: 1 / -1; }
-  .rs-img-wide { aspect-ratio: 16/6; }
+  .region-main-grid {
+    grid-template-columns: 1fr;
+  }
+  .region-visual-card {
+    min-height: 500px;
+  }
 }
 @media (max-width: 768px) {
-  .mosaic-trio { grid-template-columns: repeat(2, 1fr); }
-  .mosaic-cell:last-child { display: none; }
-  .region-strip-grid { grid-template-columns: 1fr; }
-  .rs-card-wide { grid-column: auto; }
+  .region-section {
+    padding: 72px 16px;
+  }
+  .region-header {
+    margin-bottom: 30px;
+  }
+  .region-card-grid {
+    grid-template-columns: 1fr;
+  }
+  .region-visual-card {
+    min-height: 440px;
+    border-radius: 22px;
+  }
+  .region-visual-content {
+    left: 18px;
+    right: 18px;
+    bottom: 18px;
+  }
+  .region-metrics {
+    grid-template-columns: 1fr;
+  }
+  .region-tech-card {
+    min-height: auto;
+  }
 }
 @media (max-width: 480px) {
-  .mosaic-trio { grid-template-columns: 1fr; }
-  .region-quick-stats { gap: 0; padding: 14px 16px; }
-  .rqs-val { font-size: 1.3rem; }
+  .region-visual-card {
+    min-height: 380px;
+  }
+  .rtc-top {
+    margin-bottom: 20px;
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@
             <option value="kc">Kc - Crop Coefficient</option>
             <option value="cwr">CWR - Crop Water Requirement</option>
             <option value="iwr">IWR - Irrigation Water Requirement</option>
+            <option value="etc">ETC - Evapotranspiration</option>
           </select>
           <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <polyline points="6 9 12 15 18 9"/>
@@ -289,11 +290,17 @@ function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, tooltipB
     return
   }
 
-  const datasets = data.data.map((yearData, idx) => {
+  // Reorder data to start from November-December
+  const monthOrder = ['November', 'December', 'January', 'February', 'March', 'April']
+  const monthIndices = monthOrder.map(month => data.month_names?.indexOf(month) ?? -1).filter(idx => idx !== -1)
+
+  const reorderedLabels = monthOrder
+  const reorderedDatasets = data.data.map((yearData, idx) => {
     const color = YEAR_COLORS[idx % YEAR_COLORS.length]
+    const reorderedData = monthIndices.map(monthIdx => yearData.cumulative?.[monthIdx] ?? null)
     return {
       label: String(yearData.year),
-      data: yearData.cumulative ?? [],
+      data: reorderedData,
       borderColor: color,
       backgroundColor: color + '18',
       borderWidth: 2.6,
@@ -311,8 +318,8 @@ function renderCumulative(ctx, data, { textColor, gridColor, tooltipBg, tooltipB
   chart = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: data.month_names || [],
-      datasets
+      labels: reorderedLabels,
+      datasets: reorderedDatasets
     },
     options: {
       responsive: true,
@@ -408,20 +415,20 @@ onUnmounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 1.5rem;
+  padding: 0.85rem;
   gap: 0;
   background: #fff;
   color: #1b485f;
   font-family: 'Inter', 'Segoe UI', sans-serif;
-  border-radius: 18px;
+  border-radius: 12px;
 }
 
 /* ── Controls ── */
 .chart-controls {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
-  margin-bottom: 1.25rem;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
   flex-wrap: wrap;
 }
 
@@ -563,8 +570,8 @@ onUnmounted(() => {
   position: relative;
   background: #fff;
   border: 1px solid rgba(60, 60, 60, 0.08);
-  border-radius: 16px;
-  padding: 0.75rem;
+  border-radius: 10px;
+  padding: 0.25rem;
 }
 
 .chart {
@@ -577,7 +584,7 @@ onUnmounted(() => {
 
 /* Responsive */
 @media (max-width: 768px) {
-  .chart-container { padding: 1rem; }
+  .chart-container { padding: 0.65rem; }
 
   .chart-controls {
     flex-direction: column;
